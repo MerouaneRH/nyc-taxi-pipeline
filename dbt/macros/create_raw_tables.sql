@@ -7,7 +7,8 @@
   (older years have different passenger_count etc.) can fail on read, so the
   project vars min_year/max_year cap which partitions staging touches.
 #}
-{% macro create_raw_tables(bucket='merouane-nyc-taxi-raw-euw3-2026') %}
+{% macro create_raw_tables(bucket=env_var('S3_BUCKET', 'merouane-nyc-taxi-raw-euw3-2026')) %}
+  {% if not modules.re.fullmatch('[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket) %}{{ exceptions.raise_compiler_error('invalid S3 bucket: ' ~ bucket) }}{% endif %}
   {% set db = var('raw_database') %}
   {% if not modules.re.fullmatch('[a-z0-9_]+', db) %}{{ exceptions.raise_compiler_error('invalid raw_database: ' ~ db) }}{% endif %}
   {% set stmts = [] %}

@@ -9,13 +9,16 @@ USER airflow
 
 # NOTE: ingestion deps below mirror pyproject.toml runtime deps; boto3 is
 # pulled in by dbt-athena. Keep in sync when ingestion/ adds libraries.
-# boto3 version matches uv.lock.
+# boto3/tenacity versions match uv.lock. tenacity is imported by ingestion/ (also a
+# transitive dbt-athena dep, but pinned explicitly). dbt-athena is the adapter;
+# pyproject's dbt-athena-community is a thin wrapper that resolves to the same 1.11.1.
 RUN /opt/venv/bin/pip install --no-cache-dir \
       "dbt-core==1.12.6" \
       "dbt-athena==1.11.1" \
       "pandas<3" \
       "pyarrow>=26.0.0" \
       "requests>=2.34.2" \
-      "boto3==1.43.118"
+      "boto3==1.43.118" \
+      "tenacity==9.2.1"
 
 ENV PYTHONPATH=/opt/project
