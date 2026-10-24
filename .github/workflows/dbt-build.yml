@@ -30,6 +30,18 @@ jobs:
           python-version: "3.12"
       - name: Install dbt
         run: uv sync --frozen --group dbt
+      - name: Debug OIDC claims (temporary, remove after fixing the trust policy)
+        run: |
+          TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "::add-mask::$TOKEN"
+          printf '%s' "$TOKEN" | python3 -c "
+          import sys, json, base64
+          p = sys.stdin.read().split('.')[1]
+          c = json.loads(base64.urlsafe_b64decode(p + '=' * (-len(p) % 4)))
+          keep = ('iss','sub','aud','repository','repository_owner','ref','event_name','job_workflow_ref')
+          print(json.dumps({k: c.get(k) for k in keep}, indent=1))
+          "
       - name: Assume AWS role (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
