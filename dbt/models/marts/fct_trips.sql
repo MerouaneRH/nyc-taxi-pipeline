@@ -1,3 +1,27 @@
+{#-
+  Incremental by month (ADR 0007): hive table partitioned by pickup_month, strategy
+  insert_overwrite. `--vars '{run_month: "2024-02"}'` rebuilds only that partition;
+  without run_month an incremental run rewrites every partition in range; --full-refresh
+  drops and rebuilds the table.
+-#}
+{%- set run_month = var('run_month', none) -%}
+{%- if run_month is not none -%}
+  {%- if not modules.re.match('^[0-9]{4}-(0[1-9]|1[0-2])$', run_month | string) -%}
+    {{ exceptions.raise_compiler_error("run_month must match YYYY-MM, got: " ~ run_month) }}
+  {%- endif -%}
+  {%- set run_year = (run_month | string)[:4] | int -%}
+  {%- if run_year < var('min_year') | int or run_year > var('max_year') | int -%}
+    {{ exceptions.raise_compiler_error("run_month " ~ run_month ~ " is outside min_year..max_year") }}
+  {%- endif -%}
+{%- endif -%}
+{{ config(
+    materialized='incremental',
+    incremental_strategy='insert_overwrite',
+    partitioned_by=['pickup_month'],
+    table_type='hive',
+    format='parquet',
+) }}
+
 select
     t.trip_id,
     t.vendor_id,
@@ -29,9 +53,16 @@ select
     t.tip_amount,
     t.tolls_amount,
     t.total_amount,
-    case when t.fare_amount > 0 then t.tip_amount / t.fare_amount end as tip_pct
+    case when t.fare_amount > 0 then t.tip_amount / t.fare_amount end as tip_pct,
+    -- partition column: must stay last
+    format('%04d-%02d', t.src_year, t.src_month) as pickup_month
 from {{ ref('stg_trips') }} t
 left join {{ ref('dim_zone') }} pz on t.pickup_zone_id = pz.zone_id
 left join {{ ref('dim_zone') }} dz on t.dropoff_zone_id = dz.zone_id
 left join {{ ref('dim_vendor') }} v
     on t.vendor_id = v.vendor_id and v.dbt_valid_to is null
+{% if run_month is not none and not flags.FULL_REFRESH %}
+-- src_year/src_month filter lets Athena prune raw partitions (see stg_trips dedup window)
+where t.src_year = {{ run_year }}
+  and t.src_month = {{ (run_month | string)[5:7] | int }}
+{% endif %}

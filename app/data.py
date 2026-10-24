@@ -15,7 +15,7 @@ import boto3
 import pandas as pd
 import streamlit as st
 
-WORKGROUP = os.environ.get("ATHENA_WORKGROUP", "primary")
+WORKGROUP = os.environ.get("ATHENA_WORKGROUP", "nyc-taxi-dbt")
 REGION = os.environ.get("AWS_REGION", "eu-west-3")
 DATABASE = os.environ.get("ATHENA_DATABASE", "nyc_taxi_dbt")
 OUTPUT = os.environ.get("ATHENA_OUTPUT", "s3://merouane-nyc-taxi-raw-euw3-2026/athena-results/")

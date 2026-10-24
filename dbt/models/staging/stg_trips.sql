@@ -45,8 +45,10 @@ valid as (
       and month(pickup_at) = src_month
 ),
 
+-- src_year/src_month in the window keys change nothing (a trip_id embeds its pickup time,
+-- which must fall in the file month) but let filters on them push below the window.
 dedup as (
-    select *, row_number() over (partition by trip_id order by pickup_at) as rn
+    select *, row_number() over (partition by src_year, src_month, trip_id order by pickup_at) as rn
     from valid
 )
 
