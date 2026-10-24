@@ -11,3 +11,10 @@ dependencies = [
     "pyspark>=4.2.0",
     "requests>=2.34.2",
 ]
+
+[dependency-groups]
+dbt = [
+    "boto3>=1.43.118",
+    "dbt-athena-community>=1.11.1",
+    "dbt-core>=1.12.6",
+]

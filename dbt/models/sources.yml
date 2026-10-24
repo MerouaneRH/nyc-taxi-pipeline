@@ -1,0 +1,10 @@
+version: 2
+sources:
+  - name: raw
+    database: awsdatacatalog
+    schema: nyc_taxi_raw
+    tables:
+      - name: yellow_trips
+        description: TLC yellow trips, partition-projected on year/month.
+      - name: taxi_zone_lookup
+        description: TLC taxi zone lookup CSV.

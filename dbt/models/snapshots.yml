@@ -1,0 +1,8 @@
+version: 2
+snapshots:
+  - name: dim_vendor
+    columns:
+      - name: vendor_id
+        data_tests: [not_null]
+      - name: vendor_name
+        data_tests: [not_null]
