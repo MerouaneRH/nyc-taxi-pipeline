@@ -17,6 +17,8 @@ DBT_DIR = f"{PROJECT}/dbt"
 MONTH = "{{ data_interval_start.strftime('%Y-%m') }}"
 YEAR = "{{ data_interval_start.year }}"
 VARS = f"--vars '{{min_year: {YEAR}, max_year: {YEAR}}}'"
+# incremental: only this month's partition of fct_trips is rewritten
+BUILD_VARS = f"--vars '{{min_year: {YEAR}, max_year: {YEAR}, run_month: \"{MONTH}\"}}'"
 
 default_args = {
     "owner": "data-eng",
@@ -53,6 +55,9 @@ with DAG(
         f" && {dbt_cmd.format(sub='seed')}",
     )
     dbt_snapshot = _bash("dbt_snapshot", f"{dbt_cmd.format(sub='snapshot')} {VARS}")
-    dbt_build = _bash("dbt_build", f"{dbt_cmd.format(sub='build')} {VARS}")
+    dbt_build = _bash(
+        "dbt_build",
+        f"{dbt_cmd.format(sub='build')} --select stg_trips+ {BUILD_VARS}",
+    )
 
     ingest_zones >> ingest_trips >> dbt_prepare >> dbt_snapshot >> dbt_build

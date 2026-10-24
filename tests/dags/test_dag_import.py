@@ -50,3 +50,9 @@ def test_ingest_trips_idempotent_and_retries(dagbag):
     assert t.retries >= 2
     assert "{{ data_interval_start.strftime('%Y-%m') }}" in t.bash_command
     assert "--service yellow" in t.bash_command
+
+
+def test_dbt_build_is_incremental_for_the_month(dagbag):
+    cmd = dagbag.dags["nyc_taxi_elt"].get_task("dbt_build").bash_command
+    assert "--select stg_trips+" in cmd
+    assert "run_month" in cmd and "data_interval_start.strftime('%Y-%m')" in cmd
