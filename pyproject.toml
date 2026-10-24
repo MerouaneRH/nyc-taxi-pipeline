@@ -3,6 +3,7 @@ name = "nyc-taxi-pipeline"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "boto3>=1.43.118",
     "ipykernel>=7.4.0",
     "jupyterlab>=4.6.4",
     "matplotlib>=3.11.2",
@@ -10,4 +11,13 @@ dependencies = [
     "pyarrow>=26.0.0",
     "pyspark>=4.2.0",
     "requests>=2.34.2",
+    "tenacity>=9.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "moto>=5.2.4",
+    "pytest>=9.1.1",
+    "responses>=0.26.3",
+    "ruff>=0.17.2",
 ]
