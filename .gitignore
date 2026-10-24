@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+data/
+spark-warehouse/
+metastore_db/
+.env
+.DS_Store
