@@ -28,3 +28,47 @@ models:
     columns:
       - name: pickup_date
         data_tests: [not_null]
+  - name: mart_hourly_borough
+    description: Hourly trips/revenue by pickup borough, payment type and vendor (from fct_trips).
+    columns:
+      - name: row_key
+        data_tests: [not_null, unique]
+      - name: pickup_month
+        data_tests: [not_null]
+      - name: pickup_date
+        data_tests: [not_null]
+      - name: pickup_hour
+        data_tests: [not_null]
+      - name: trips
+        data_tests: [not_null]
+      - name: card_fare_revenue
+        description: Fare sum where payment_type_name = 'credit_card'; denominator for tip %.
+      - name: card_tip_revenue
+        description: Tip sum where payment_type_name = 'credit_card' (tips are only recorded for cards).
+      - name: payment_type_name
+        data_tests:
+          - accepted_values:
+              arguments: {values: [flex_fare, credit_card, cash, no_charge, dispute, unknown, voided]}
+  - name: mart_od_pairs
+    description: Origin-destination zone pairs per month (from fct_trips).
+    columns:
+      - name: row_key
+        data_tests: [not_null, unique]
+      - name: pickup_month
+        data_tests: [not_null]
+      - name: pickup_zone_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: "ref('dim_zone')", field: zone_id}}
+      - name: dropoff_zone_id
+        data_tests:
+          - relationships: {arguments: {to: "ref('dim_zone')", field: zone_id}}
+      - name: trips
+        data_tests: [not_null]
+  - name: mart_month_quality
+    description: Per-month raw vs staged row counts and implausible-speed trips. Rebuilt on every run.
+    columns:
+      - name: month
+        data_tests: [not_null, unique]
+      - name: raw_rows
+        data_tests: [not_null]
