@@ -5,7 +5,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from app import queries
+from app import queries, queries_dq
 from app.data import TTL, build_daily_query, get_client, run_query
 from app.queries import Filters
 
@@ -67,3 +67,20 @@ def load_quality(start: date, end: date) -> pd.DataFrame:
 @st.cache_data(ttl=TTL, max_entries=16, show_spinner="Querying daily trend...")
 def load_trend_daily(start: date, end: date, borough: str | None) -> pd.DataFrame:
     return run_query(get_client(), *build_daily_query(start, end, borough))
+
+
+@st.cache_data(ttl=TTL, max_entries=16, show_spinner="Querying suspect-trip summary...")
+def load_dq_summary(start: date, end: date) -> pd.DataFrame:
+    return run_query(get_client(), *queries_dq.build_summary_query(start, end))
+
+
+@st.cache_data(ttl=TTL, max_entries=32, show_spinner="Loading example suspect trips...")
+def load_dq_examples(
+    start: date, end: date, reason: str, vendor: str | None, payment: str | None
+) -> pd.DataFrame:
+    return run_query(get_client(), *queries_dq.build_examples_query(start, end, reason, vendor, payment))
+
+
+@st.cache_data(ttl=TTL, max_entries=32, show_spinner="Building distribution...")
+def load_dq_distribution(start: date, end: date, reason: str) -> pd.DataFrame:
+    return run_query(get_client(), *queries_dq.build_distribution_query(start, end, reason))
