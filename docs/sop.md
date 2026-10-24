@@ -55,9 +55,36 @@ docker compose up --build -d
 
 Open `http://localhost:8080` (bound to `127.0.0.1` only), log in with `AIRFLOW_ADMIN_USER` (default `admin`), unpause `nyc_taxi_elt`. Task order: `ingest_zones`, `ingest_trips`, `dbt_prepare`, `dbt_snapshot`, `dbt_build`. Settings: `@monthly`, `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`, 3 retries with exponential backoff from 5 minutes.
 
-The run for logical date D processes the month of `data_interval_start`. `min_year` and `max_year` come from that run's year. `dbt_build` runs `--select stg_zones+ stg_trips+` with `run_month` set to the month.
+The run for logical date D tries a window of months ending at `data_interval_start` (default 4, newest first). `dbt_snapshot` takes `min_year` and `max_year` from the run's year. `dbt_build` builds each month that `ingest_trips` uploaded in this run (oldest first), with `--select stg_zones+ stg_trips+`, that month's own year as `min_year`/`max_year`, and `run_month` set to the month.
 
-Unpublished months: `ingest_trips` runs with `--skip-unpublished` and `skip_on_exit_code=99`. If TLC has not published the month (CloudFront returns 403), the task is skipped and downstream tasks are skipped. The task is not failed.
+Late and unpublished months: `ingest_trips` runs with `--skip-unpublished` and `skip_on_exit_code=99`. Months TLC has not published (CloudFront returns 403) are logged and skipped. If nothing was uploaded in the run (every month current or unpublished), the task exits 99 and is skipped, and so are `dbt_prepare`, `dbt_snapshot` and `dbt_build`. The task is not failed. See ADR 0008.
+
+### Change the catch-up window
+
+The window is the DAG param `ingest_window_months` (integer, 1 to 12, default 4). For one run, trigger with a config:
+
+```bash
+docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt \
+  --conf '{"ingest_window_months": 6}'
+```
+
+To change the default, edit the `Param(4, ...)` in `dags/nyc_taxi_elt.py` and restart the scheduler. The `--conf` form was not run here; check the rendered `--months` list in the `ingest_trips` log. A larger window costs one HEAD request per extra month and one S3 head; no download happens for months already current.
+
+### How a late month gets picked up
+
+TLC publishes a month about two months late. The run that fires when month M ends finds M unpublished and skips it. Each later run still includes M in its window, so the first run after TLC publishes M uploads it, `NEW_MONTHS` lists it, and `dbt_build` builds it. This works only while M is inside the window. If TLC is later than N-1 months behind, raise the window or load the month by hand.
+
+### Force a rebuild of a month
+
+A run with nothing new skips `dbt_snapshot` and `dbt_build`. To rebuild a month anyway (for example after a model change), run dbt by hand for that month, using that month's year:
+
+```bash
+uv run dbt build --project-dir dbt --profiles-dir dbt --target athena \
+  --select stg_zones+ stg_trips+ \
+  --vars '{min_year: 2024, max_year: 2024, run_month: "2024-03"}'
+```
+
+To re-download the source file as well, delete the S3 object first (see Rerun a failed task).
 
 Trigger one month by hand. For `@monthly`, a run with logical date 2025-04-01 has data interval 2025-03-01 to 2025-04-01, so it processes March 2025:
 
@@ -143,7 +170,7 @@ The two errors in the table below were seen in practice. The rest of this list i
 | Athena `HIVE_BAD_DATA` / type mismatch on a month | That file has different physical column types. Narrow `min_year`/`max_year` to years with the 2024 schema. |
 | Zero rows in `fct_trips` | Month not ingested, or the year is outside the vars. Check S3 keys and `--vars`. |
 | `SchemaError: ... missing columns` | The downloaded file lacks one of the 10 required columns. The file is not uploaded. Inspect the source file. |
-| `403`/`404` from `remote_size` / download | The month is not published yet (CloudFront returns 403). In the DAG this is a skip; by hand, pass `--skip-unpublished` to get exit code 99 instead of an error. Check `https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_YYYY-MM.parquet`. |
+| `403`/`404` from `remote_size` / download | The month is not published yet (CloudFront returns 403). In the DAG this is a skip for that month; by hand, pass `--skip-unpublished` to log it and carry on (exit code 99 only if no month was uploaded). Check `https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_YYYY-MM.parquet`. |
 | `docker compose` fails with `set in .env` | Set `POSTGRES_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW__CORE__FERNET_KEY` and `AIRFLOW__WEBSERVER__SECRET_KEY` in `.env`. |
 | DAG not listed | Check `docker compose exec airflow-scheduler airflow dags list-import-errors`. |
 | Task cannot find credentials in container | Check `./.aws-airflow` holds the `nyc-taxi` profile (credentials and config). |

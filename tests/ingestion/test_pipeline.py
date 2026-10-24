@@ -333,7 +333,7 @@ def test_skip_unpublished_still_processes_other_months(s3, monkeypatch, capsys):
     responses.add(responses.GET, bad, status=403)
     mock_source(parquet_bytes(), "2024-01")
     code = pipeline.main(["--months", "2030-01", "2024-01", "--skip-unpublished"])
-    assert code == 99
+    assert code == 0  # something uploaded: dbt has work (catch-up window)
     assert list_keys(s3) == [pipeline.month_key("yellow", "2024-01")]
 
 
@@ -397,3 +397,116 @@ def test_stream_under_length_raises_and_deletes(tmp_path, monkeypatch):
     with pytest.raises(pipeline.DownloadError, match="short|incomplete|declared"):
         pipeline.stream_to_file("https://d37ci6vzurychx.cloudfront.net/x", dest)
     assert not dest.exists()
+
+
+# --- catch-up window: several months, NEW_MONTHS line, exit codes ---
+
+
+def _unpublished(month, status=403):
+    url = trip_url("yellow", month)
+    responses.add(responses.HEAD, url, status=status)
+    responses.add(responses.GET, url, status=status)
+    return url
+
+
+def _preload(s3, month):
+    body = parquet_bytes()
+    s3.put_object(Bucket=BUCKET, Key=pipeline.month_key("yellow", month), Body=body)
+    mock_source(body, month)
+
+
+def _run_window(months, capsys):
+    code = pipeline.main(["--months", *months, "--service", "yellow", "--skip-unpublished"])
+    return code, capsys.readouterr()
+
+
+@responses.activate
+def test_window_uploaded_only(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    mock_source(parquet_bytes(), "2024-02")
+    mock_source(parquet_bytes(), "2024-01")
+    code, out = _run_window(["2024-02", "2024-01"], capsys)
+    assert code == 0
+    assert out.out.splitlines()[-1] == "NEW_MONTHS=2024-01 2024-02"
+
+
+@responses.activate
+def test_window_current_only_exits_99(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _preload(s3, "2024-02")
+    _preload(s3, "2024-01")
+    code, out = _run_window(["2024-02", "2024-01"], capsys)
+    assert code == 99
+    assert out.out.splitlines()[-1] == "NEW_MONTHS="
+    assert n_gets() == 0
+
+
+@responses.activate
+def test_window_unpublished_only_exits_99(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    url = _unpublished("2030-02")
+    _unpublished("2030-01", 404)
+    code, out = _run_window(["2030-02", "2030-01"], capsys)
+    assert code == 99
+    assert out.out.splitlines()[-1] == "NEW_MONTHS="
+    assert f"unpublished {url}" in out.err
+
+
+@responses.activate
+def test_window_uploaded_and_unpublished_exits_0(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _unpublished("2030-01")
+    mock_source(parquet_bytes(), "2024-01")
+    code, out = _run_window(["2030-01", "2024-01"], capsys)
+    assert code == 0
+    assert out.out.splitlines()[-1] == "NEW_MONTHS=2024-01"
+
+
+@responses.activate
+def test_window_current_and_unpublished_exits_99(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _unpublished("2030-01")
+    _preload(s3, "2024-01")
+    code, out = _run_window(["2030-01", "2024-01"], capsys)
+    assert code == 99
+    assert out.out.splitlines()[-1] == "NEW_MONTHS="
+
+
+@responses.activate
+def test_window_new_months_oldest_first_and_only_uploaded(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    mock_source(parquet_bytes(), "2024-03")
+    _unpublished("2030-01")
+    _preload(s3, "2024-02")
+    mock_source(parquet_bytes(), "2023-12")
+    code, out = _run_window(["2024-03", "2030-01", "2024-02", "2023-12"], capsys)
+    assert code == 0
+    assert out.out.splitlines()[-1] == "NEW_MONTHS=2023-12 2024-03"
+    assert "unpublished" not in out.out
+
+
+@responses.activate
+def test_window_other_errors_still_raise(s3, monkeypatch):
+    _cli_env(s3, monkeypatch)
+    _unpublished("2030-01", 500)
+    with pytest.raises(requests.HTTPError):
+        pipeline.main(["--months", "2030-01", "--skip-unpublished"])
+
+
+@responses.activate
+def test_without_flag_unchanged_but_prints_new_months(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _preload(s3, "2024-01")
+    code = pipeline.main(["--months", "2024-01"])
+    out = capsys.readouterr().out
+    assert code == 0  # nothing uploaded, no flag: still 0 as before
+    assert out.splitlines()[-1] == "NEW_MONTHS="
+
+
+@responses.activate
+def test_zones_only_prints_no_new_months(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    responses.add(responses.HEAD, ZONES_URL, headers={"Content-Length": str(len(ZONES_CSV))})
+    responses.add(responses.GET, ZONES_URL, body=ZONES_CSV)
+    assert pipeline.main(["--zones"]) == 0
+    assert "NEW_MONTHS" not in capsys.readouterr().out

@@ -30,9 +30,11 @@ Airflow task order (`dags/nyc_taxi_elt.py`):
 `ingest_zones >> ingest_trips >> dbt_prepare >> dbt_snapshot >> dbt_build`.
 
 - `dbt_prepare` runs `dbt run-operation create_raw_tables` and `dbt seed` (both idempotent).
-- Schedule `@monthly`, `start_date` 2024-01-01, `catchup=False`. The run for logical date D processes the month of `data_interval_start`; `min_year`/`max_year` are set to that run's year.
-- `dbt_build` is incremental by month: `--select stg_zones+ stg_trips+` with `run_month` set to the month.
-- `ingest_trips` passes `--skip-unpublished` and the task uses `skip_on_exit_code=99`. A month TLC has not published yet (CloudFront returns 403) is skipped, and downstream tasks are skipped too.
+- Schedule `@monthly`, `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`.
+- Catch-up window (ADR 0008): TLC publishes a month about two months late. Each run tries the last N months ending at `data_interval_start`, newest first (`--months 2024-02 2024-01 2023-12 2023-11`). N is the DAG param `ingest_window_months` (default 4, minimum 1, maximum 12; override at trigger time). Months already in S3 with the same size are skipped, so a late-published month is picked up by a later run.
+- `ingest_trips` passes `--skip-unpublished`. Months that return 403/404 are logged as `unpublished <url>` on stderr and skipped. The last stdout line is `NEW_MONTHS=<months uploaded in this run, oldest first>` (empty if none); the BashOperator pushes it to XCom.
+- Exit codes of `ingestion.pipeline --months ... --skip-unpublished`: 0 if at least one month was uploaded, 99 if nothing was uploaded (all current, or unpublished). `skip_on_exit_code=99` turns 99 into a skipped task, so `dbt_prepare`, `dbt_snapshot` and `dbt_build` are skipped when there is nothing new.
+- `dbt_build` reads `NEW_MONTHS` from XCom and runs one incremental build per new month, oldest first: `--select stg_zones+ stg_trips+` with `min_year`/`max_year` set to that month's year and `run_month` set to the month. `min_year`/`max_year` of `dbt_snapshot` still come from the run's year.
 
 ## Stack
 
@@ -108,7 +110,7 @@ webserver secret key is unset.
 
 ```
 ingestion/
-  pipeline.py   TLC -> S3 loader used by the DAG (idempotent, retries, schema check, exit 99 for unpublished months)
+  pipeline.py   TLC -> S3 loader used by the DAG (idempotent, retries, schema check, `NEW_MONTHS=` line, exit 99 when nothing was uploaded)
   download.py   local download of TLC files to data/raw (also provides trip_url)
   soda.py       local pull from the NYC Open Data SODA API to data/raw/soda
 dbt/

@@ -51,10 +51,10 @@ flowchart LR
 
 - Tasks are `BashOperator` calls with working directory `/opt/project`.
 - Python and dbt run from `/opt/venv`, separate from Airflow's own environment, to avoid dependency conflicts.
-- The run for logical date D processes the month of `data_interval_start`, passed as `{{ data_interval_start.strftime('%Y-%m') }}` to `ingestion.pipeline --months`. `min_year` and `max_year` are set to that run's year.
-- `ingest_trips` uses `--skip-unpublished` and `skip_on_exit_code=99`. A month TLC has not published yet (CloudFront returns 403) is skipped, and downstream tasks are skipped.
+- The run for logical date D passes a window of months to `ingestion.pipeline --months`: `data_interval_start` and the previous N-1 months, newest first, computed in Jinja with `macros.dateutil.relativedelta`. N is the DAG param `ingest_window_months` (default 4, 1 to 12). `dbt_snapshot` takes `min_year` and `max_year` from the run's year. See ADR 0008.
+- `ingest_trips` uses `--skip-unpublished` and `skip_on_exit_code=99`. Months TLC has not published (CloudFront returns 403) are skipped individually. The last stdout line `NEW_MONTHS=<uploaded months, oldest first>` goes to XCom. Exit 0 if a month was uploaded, 99 if not; on 99 the downstream tasks are skipped.
 - `dbt_prepare` runs `dbt run-operation create_raw_tables` and `dbt seed` (idempotent). `dbt_snapshot` runs `dbt snapshot` only; it does not run `dbt deps`.
-- `dbt_build` runs `dbt build --select stg_zones+ stg_trips+` with `run_month` set to the month, so only that month's `fct_trips` partition is rewritten.
+- `dbt_build` loops over the months in the `NEW_MONTHS` XCom value (oldest first) and runs `dbt build --select stg_zones+ stg_trips+` for each, with that month's year and `run_month`, so only that month's `fct_trips` partition is rewritten. An empty list does nothing.
 - Defaults: owner `data-eng`, 3 retries, 5 minute delay, exponential backoff.
 
 ## Local runtime (Docker Compose)
@@ -81,3 +81,4 @@ Three jobs on pull requests, no secrets: lint plus unit tests, DAG import tests,
 - [0005 Idempotent size-based ingestion skip](adr/0005-idempotent-size-based-skip.md)
 - [0006 CI without AWS secrets](adr/0006-ci-without-aws-secrets.md)
 - [0007 Incremental fct_trips and capped workgroup](adr/0007-incremental-fct-trips-and-workgroup-cap.md)
+- [0008 Catch-up window for late months](adr/0008-catch-up-window-for-late-months.md)

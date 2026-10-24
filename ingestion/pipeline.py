@@ -256,42 +256,51 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-unpublished",
         action="store_true",
-        help=f"on HTTP 403/404 log 'unpublished <url>' and exit {EXIT_UNPUBLISHED} "
-        "after other work, instead of raising",
+        help="on HTTP 403/404 log 'unpublished <url>' and carry on instead of raising; "
+        f"exit {EXIT_UNPUBLISHED} when no month was uploaded",
     )
     args = parser.parse_args(argv)
     if not args.zones and not args.months:
         parser.error("nothing to do: pass --zones and/or --months")
 
     s3, bucket = make_s3(), bucket_name()
-    unpublished = False
+    zones_unpublished = False
     if args.zones:
-        unpublished |= _run(
+        zones_status = _run(
             args, ZONES_URL, ZONES_KEY, bucket, lambda: ingest_zones(s3, bucket)
         )
-    for month in args.months:
-        key = month_key(args.service, month)
-        unpublished |= _run(
-            args,
-            trip_url(args.service, month),
-            key,
-            bucket,
-            lambda m=month: ingest_month(s3, bucket, args.service, m),
-        )
-    return EXIT_UNPUBLISHED if unpublished else 0
+        zones_unpublished = zones_status == "unpublished"
+    results = {m: _ingest_one(args, s3, bucket, m) for m in args.months}
+    if not args.months:
+        return EXIT_UNPUBLISHED if zones_unpublished else 0
+    new = sorted(m for m, status in results.items() if status == "uploaded")
+    print(f"NEW_MONTHS={' '.join(new)}")
+    if args.skip_unpublished and not new:
+        return EXIT_UNPUBLISHED  # nothing new for dbt to build
+    return 0
 
 
-def _run(args, url: str, key: str, bucket: str, action) -> bool:
-    """Run one unit of work; True if skipped as unpublished."""
+def _ingest_one(args, s3, bucket: str, month: str) -> str:
+    return _run(
+        args,
+        trip_url(args.service, month),
+        month_key(args.service, month),
+        bucket,
+        lambda: ingest_month(s3, bucket, args.service, month),
+    )
+
+
+def _run(args, url: str, key: str, bucket: str, action) -> str:
+    """Run one unit of work; returns 'uploaded', 'skipped' or 'unpublished'."""
     try:
         result = action()
     except requests.HTTPError as exc:
         if not (args.skip_unpublished and _is_unpublished(exc)):
             raise
         print(f"unpublished {url}", file=sys.stderr)
-        return True
+        return "unpublished"
     print(f"{result:9} s3://{bucket}/{key}")
-    return False
+    return result
 
 
 if __name__ == "__main__":
