@@ -81,7 +81,7 @@ Streamlit app (needs AWS access to the mart):
 uv run --group app streamlit run app/main.py
 ```
 
-It shows KPI tiles, daily revenue, top pickup zones and an hour/weekday heatmap.
+Views: Overview (KPI tiles, daily revenue, top pickup zones, hour/weekday heatmap), Tips, Airports, Routes, Efficiency, Trends (week-over-week change, anomaly days) and Data quality. A view only queries when it is selected, and shows the MB it scanned. Sidebar filters: borough, dates, top zones, and for Tips and Efficiency also hour range, payment type, vendor and weekday/weekend.
 Queries filter on the `pickup_month` partition so Athena prunes partitions, and
 errors are shown as generic messages. The compose service is commented out.
 
@@ -111,7 +111,7 @@ ingestion/
   soda.py       local pull from the NYC Open Data SODA API to data/raw/soda
 dbt/
   models/staging/   stg_trips, stg_zones
-  models/marts/     dim_zone, fct_trips, mart_daily_zone_revenue
+  models/marts/     dim_zone, fct_trips, mart_daily_zone_revenue, mart_hourly_borough, mart_od_pairs, mart_month_quality
   snapshots/        dim_vendor (SCD2, Iceberg)
   seeds/            vendors.csv
   macros/           create_raw_tables (Glue database + external tables)
@@ -138,6 +138,9 @@ docs/               architecture.md, sop.md, adr/
 | `dim_vendor` | snapshot (Iceberg) | SCD2, `check` strategy on `vendor_name`, source is the `vendors` seed |
 | `fct_trips` | incremental (hive, parquet, `insert_overwrite`, partitioned by `pickup_month`) | One row per trip; joins zones and the current vendor row (`dbt_valid_to is null`); adds duration, speed, tip percent, payment name |
 | `mart_daily_zone_revenue` | table (hive, parquet) | Trips and revenue per pickup zone per day |
+| `mart_hourly_borough` | incremental (hive, parquet, `insert_overwrite`, partitioned by `pickup_month`) | Per day, hour, borough, payment type and vendor: trips, revenue, distance and duration sums, card-only fare and tip sums (cash tips are not recorded) |
+| `mart_od_pairs` | incremental (same pattern) | Per month, pickup zone and dropoff zone: trips, revenue, distance and duration sums |
+| `mart_month_quality` | table | Per month: raw rows, staged rows, dropped rows and percent, implausible-speed rows |
 
 Cost control: `min_year` and `max_year` vars (both 2024 in
 `dbt_project.yml`) restrict which partitions staging scans. Override with
