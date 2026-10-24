@@ -1,0 +1,19 @@
+version: 2
+models:
+  - name: stg_zones
+    columns:
+      - name: zone_id
+        data_tests: [not_null, unique]
+  - name: stg_trips
+    columns:
+      - name: trip_id
+        data_tests: [not_null, unique]
+      - name: vendor_id
+        data_tests:
+          - not_null
+          - accepted_values: {arguments: {values: [1, 2, 6, 7], quote: false}}
+      - name: payment_type
+        data_tests:
+          - accepted_values: {arguments: {values: [0, 1, 2, 3, 4, 5, 6], quote: false}}
+      - name: pickup_at
+        data_tests: [not_null]

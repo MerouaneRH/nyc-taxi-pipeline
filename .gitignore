@@ -6,3 +6,5 @@ spark-warehouse/
 metastore_db/
 .env
 .DS_Store
+.claude/
+dbt/.user.yml

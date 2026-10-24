@@ -1,0 +1,29 @@
+name: nyc_taxi
+version: "1.0.0"
+config-version: 2
+profile: nyc_taxi
+
+model-paths: [models]
+seed-paths: [seeds]
+snapshot-paths: [snapshots]
+macro-paths: [macros]
+test-paths: [tests]
+
+vars:
+  raw_database: nyc_taxi_raw
+  # Hard cap on scanned partitions (cost control). Override: --vars '{min_year: 2023}'
+  min_year: 2024
+  max_year: 2024
+
+models:
+  nyc_taxi:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+      +table_type: hive
+      +format: parquet
+
+seeds:
+  nyc_taxi:
+    +table_type: hive

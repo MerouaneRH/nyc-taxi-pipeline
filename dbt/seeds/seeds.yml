@@ -1,0 +1,8 @@
+version: 2
+seeds:
+  - name: vendors
+    description: TLC vendor reference (source for the dim_vendor snapshot).
+    config:
+      column_types:
+        vendor_id: int
+        vendor_name: string

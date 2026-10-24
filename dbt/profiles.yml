@@ -1,0 +1,15 @@
+# No secrets: credentials come from the AWS profile / default credential chain.
+nyc_taxi:
+  target: athena
+  outputs:
+    athena:
+      type: athena
+      region_name: "{{ env_var('AWS_REGION', 'eu-west-3') }}"
+      aws_profile_name: "{{ env_var('AWS_PROFILE', 'nyc-taxi') }}"
+      s3_staging_dir: "{{ env_var('DBT_S3_STAGING_DIR', 's3://merouane-nyc-taxi-raw-euw3-2026/athena-results/') }}"
+      s3_data_dir: "{{ env_var('DBT_S3_DATA_DIR', 's3://merouane-nyc-taxi-raw-euw3-2026/warehouse/') }}"
+      work_group: "{{ env_var('DBT_ATHENA_WORKGROUP', 'primary') }}"
+      database: awsdatacatalog
+      schema: "{{ env_var('DBT_SCHEMA', 'nyc_taxi_dbt') }}"
+      threads: 4
+      num_retries: 2

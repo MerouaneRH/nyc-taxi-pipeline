@@ -21,3 +21,8 @@ dev = [
     "responses>=0.26.3",
     "ruff>=0.17.2",
 ]
+dbt = [
+    "boto3>=1.43.118",
+    "dbt-athena-community>=1.11.1",
+    "dbt-core>=1.12.6",
+]
