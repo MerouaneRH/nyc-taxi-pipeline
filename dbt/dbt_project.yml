@@ -14,6 +14,13 @@ vars:
   # Hard cap on scanned partitions (cost control). Override: --vars '{min_year: 2023}'
   min_year: 2024
   max_year: 2024
+  # Data-quality thresholds for dq_suspect_trips (judgment calls, tune here)
+  dq_distance_absurd_miles: 100
+  dq_speed_max_mph: 100
+  dq_short_trip_seconds: 60
+  dq_short_trip_min_miles: 1
+  dq_zero_distance_min_fare: 10
+  dq_long_trip_minutes: 720
 
 models:
   nyc_taxi:

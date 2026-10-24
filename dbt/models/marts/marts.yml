@@ -66,9 +66,57 @@ models:
       - name: trips
         data_tests: [not_null]
   - name: mart_month_quality
-    description: Per-month raw vs staged row counts and implausible-speed trips. Rebuilt on every run.
+    description: >
+      Per-month raw vs staged row counts, implausible-speed trips and the reasons rows were dropped
+      by staging. Rebuilt on every run. The dropped_* columns are counted on the raw source and are
+      NOT mutually exclusive (one row can match several rules), so they may sum to more than
+      dropped_rows. Negative totals (dropped_negative_total, negative_total_sum) are
+      refunds/adjustments (mostly payment types dispute, cash, no_charge), not bad records;
+      staging drops them so revenue marts ignore them.
     columns:
       - name: month
         data_tests: [not_null, unique]
       - name: raw_rows
         data_tests: [not_null]
+      - name: dropped_negative_total
+        description: Raw rows with total_amount < 0 (refunds/adjustments, dropped by staging).
+      - name: negative_total_sum
+        description: Sum of those negative totals (a negative number); revenue excluded by the drop.
+      - name: dropped_dropoff_before_pickup
+        description: Raw rows with dropoff earlier than pickup.
+      - name: dropped_duration_ge_24h
+        description: Raw rows (dropoff >= pickup) lasting 24 hours or more.
+      - name: dropped_pickup_outside_month
+        description: Raw rows whose pickup falls outside the file's own year/month.
+      - name: passenger_missing_rows
+        description: Staged rows (stg_trips) with passenger_count null or 0. Kept, not dropped.
+  - name: dq_suspect_trips
+    description: >
+      Trips from fct_trips that look wrong, one row per trip, never removed from fct_trips.
+      reason_code is the highest-priority matching rule; reason_codes lists all matches in priority
+      order. Thresholds are dbt vars (dq_*) and are judgment calls. suspect_field says which field
+      is the likely broken one (distance, timestamps, fare, or both).
+    columns:
+      - name: trip_id
+        data_tests: [not_null, unique]
+      - name: pickup_month
+        data_tests: [not_null]
+      - name: reason_code
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments: {values: [DISTANCE_ABSURD, SPEED_IMPLAUSIBLE, TIMESTAMP_SUSPECT, ZERO_DISTANCE_PAID, LONG_DURATION, ZERO_TOTAL]}
+      - name: suspect_field
+        data_tests:
+          - not_null
+          - accepted_values: {arguments: {values: [distance, timestamps, fare, both]}}
+  - name: mart_dq_summary
+    description: >
+      Per month and primary reason_code: trips, share of the month, money on flagged rows and an
+      example trip. Each suspect trip is counted once, under its primary reason_code.
+    columns:
+      - name: reason_code
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments: {values: [DISTANCE_ABSURD, SPEED_IMPLAUSIBLE, TIMESTAMP_SUSPECT, ZERO_DISTANCE_PAID, LONG_DURATION, ZERO_TOTAL]}
