@@ -1,0 +1,62 @@
+name: ci
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    # Project deps (pandas/pyarrow/requests) conflict with Airflow's constraint
+    # file, so DAG tests run in a separate job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps (no AWS credentials in CI)
+        run: |
+          uv venv
+          uv pip install ruff pytest -e .
+      - name: Ruff
+        run: .venv/bin/ruff check .
+      - name: Pytest (excluding DAG tests)
+        run: .venv/bin/python -m pytest tests -q --ignore=tests/dags
+  dag-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Airflow (pinned, constrained)
+        run: |
+          uv venv
+          uv pip install pytest "apache-airflow==2.10.5" \
+            --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt
+      - name: DAG import tests
+        env:
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+        run: .venv/bin/python -m pytest tests/dags -q
+  dbt-parse:
+    # Limitation: parse only. `dbt compile`/`build` need a live Athena connection
+    # and CI holds no AWS secrets, so models are never compiled against or run on AWS.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "dbt-core==1.12.6" "dbt-athena==1.11.1"
+      - name: dbt deps + parse
+        working-directory: dbt
+        env:
+          AWS_REGION: eu-west-3
+          AWS_DEFAULT_REGION: eu-west-3
+          S3_BUCKET: ci-placeholder-bucket
+        run: |
+          dbt deps --profiles-dir . --target athena
+          dbt parse --profiles-dir . --target athena
