@@ -172,7 +172,9 @@ def build_quality_query(start: date, end: date) -> tuple[str, list[str]]:
     start, end = validate_range(start, end)
     sql = (
         "select month, raw_rows, staged_rows, dropped_rows, dropped_pct, "
-        "implausible_speed_rows, built_at from mart_month_quality "
+        "implausible_speed_rows, dropped_negative_total, negative_total_sum, "
+        "dropped_dropoff_before_pickup, dropped_duration_ge_24h, dropped_pickup_outside_month, "
+        "passenger_missing_rows, built_at from mart_month_quality "
         "where month between ? and ? order by month limit 60"
     )
     return sql, _months(start, end)

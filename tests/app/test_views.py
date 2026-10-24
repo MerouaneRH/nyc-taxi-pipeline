@@ -57,7 +57,24 @@ LSTUBS = {
     "load_trend_daily": _attr(_daily()),
     "load_quality": _attr(pd.DataFrame({
         "month": ["2024-01"], "raw_rows": [100], "staged_rows": [98], "dropped_rows": [2],
-        "dropped_pct": [2.0], "implausible_speed_rows": [3], "built_at": ["2024-02-01"]})),
+        "dropped_pct": [2.0], "implausible_speed_rows": [3], "built_at": ["2024-02-01"],
+        "dropped_negative_total": [1], "negative_total_sum": [-25.5],
+        "dropped_dropoff_before_pickup": [1], "dropped_duration_ge_24h": [0],
+        "dropped_pickup_outside_month": [0], "passenger_missing_rows": [4]})),
+    "load_dq_summary": _attr(pd.DataFrame({
+        "reason_code": ["SPEED_IMPLAUSIBLE", "ZERO_TOTAL"],
+        "suspect_field": ["timestamps", "fare"], "trips": [5, 2],
+        "total_amount_sum": [100.0, 0.0], "example_trip_id": ["a", "b"]})),
+    "load_dq_examples": _attr(pd.DataFrame({
+        "trip_id": ["a"], "pickup_at": pd.to_datetime(["2024-01-02 10:00"]),
+        "dropoff_at": pd.to_datetime(["2024-01-02 10:01"]), "trip_duration_min": [1.0],
+        "trip_distance_miles": [30.0], "avg_speed_mph": [1800.0], "passenger_count": [1],
+        "fare_amount": [50.0], "tip_amount": [5.0], "total_amount": [60.0],
+        "payment_type_name": ["Credit card"], "vendor_name": ["VeriFone"],
+        "pickup_zone": ["A"], "pickup_borough": ["Queens"], "dropoff_zone": ["B"],
+        "dropoff_borough": ["Bronx"], "reason_code": ["SPEED_IMPLAUSIBLE"],
+        "reason_codes": ["SPEED_IMPLAUSIBLE,LONG_DURATION"], "suspect_field": ["timestamps"]})),
+    "load_dq_distribution": _attr(pd.DataFrame({"bucket": [0, 50, 100], "trips": [3, 2, 1]})),
 }
 
 
@@ -67,7 +84,8 @@ def _run(view=None, overrides=None):
             for name, val in {**stubs, **(overrides or {})}.items():
                 if not hasattr(mod, name):
                     continue
-                kw = {"side_effect": val} if isinstance(val, Exception) else {"return_value": val}
+                is_fn = isinstance(val, Exception) or callable(val)
+                kw = {"side_effect": val} if is_fn else {"return_value": val}
                 stack.enter_context(patch.object(mod, name, **kw))
         at = AppTest.from_file(str(MAIN), default_timeout=30).run()
         if view:
