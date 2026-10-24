@@ -2,7 +2,7 @@
 with src as (
     select * from {{ source('raw', 'yellow_trips') }}
     -- partition predicate => projection prunes S3 scan (cost control)
-    where year between {{ var('min_year') }} and {{ var('max_year') }}
+    where year between {{ var('min_year') | int }} and {{ var('max_year') | int }}
 ),
 
 typed as (

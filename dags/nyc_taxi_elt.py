@@ -15,6 +15,8 @@ DBT = "/opt/venv/bin/dbt"
 PROJECT = "/opt/project"
 DBT_DIR = f"{PROJECT}/dbt"
 MONTH = "{{ data_interval_start.strftime('%Y-%m') }}"
+YEAR = "{{ data_interval_start.year }}"
+VARS = f"--vars '{{min_year: {YEAR}, max_year: {YEAR}}}'"
 
 default_args = {
     "owner": "data-eng",
@@ -44,11 +46,14 @@ with DAG(
         f"{PY} -m ingestion.pipeline --months {MONTH} --service yellow",
     )
     dbt_cmd = f"{DBT} {{sub}} --project-dir {DBT_DIR} --profiles-dir {DBT_DIR} --target athena"
-    dbt_snapshot = _bash(
-        "dbt_snapshot",
+    # idempotent setup: raw external tables (CREATE ... IF NOT EXISTS) and the vendors seed
+    dbt_prepare = _bash(
+        "dbt_prepare",
         f"{DBT} deps --project-dir {DBT_DIR} --profiles-dir {DBT_DIR} --target athena"
-        f" && {dbt_cmd.format(sub='snapshot')}",
+        f" && {dbt_cmd.format(sub='run-operation create_raw_tables')}"
+        f" && {dbt_cmd.format(sub='seed')}",
     )
-    dbt_build = _bash("dbt_build", dbt_cmd.format(sub="build"))
+    dbt_snapshot = _bash("dbt_snapshot", f"{dbt_cmd.format(sub='snapshot')} {VARS}")
+    dbt_build = _bash("dbt_build", f"{dbt_cmd.format(sub='build')} {VARS}")
 
-    ingest_zones >> ingest_trips >> dbt_snapshot >> dbt_build
+    ingest_zones >> ingest_trips >> dbt_prepare >> dbt_snapshot >> dbt_build

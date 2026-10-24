@@ -74,6 +74,8 @@ def main() -> None:
     parser.add_argument("--max-rows", type=int, help="stop after this many rows")
     args = parser.parse_args()
 
+    if not re.fullmatch(r"[a-z0-9]{4}-[a-z0-9]{4}", args.dataset):
+        parser.error(f"invalid dataset id {args.dataset!r}")
     rows = [r for page in fetch_pages(args.dataset, args.since, args.until, args.page_size, args.max_rows) for r in page]
     if not rows:
         print("no rows returned")

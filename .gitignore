@@ -8,3 +8,4 @@ metastore_db/
 .DS_Store
 .claude/
 dbt/.user.yml
+.aws-airflow/

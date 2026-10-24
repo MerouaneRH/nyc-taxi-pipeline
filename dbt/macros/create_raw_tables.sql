@@ -9,6 +9,7 @@
 #}
 {% macro create_raw_tables(bucket='merouane-nyc-taxi-raw-euw3-2026') %}
   {% set db = var('raw_database') %}
+  {% if not modules.re.fullmatch('[a-z0-9_]+', db) %}{{ exceptions.raise_compiler_error('invalid raw_database: ' ~ db) }}{% endif %}
   {% set stmts = [] %}
 
   {% do stmts.append('create database if not exists ' ~ db) %}

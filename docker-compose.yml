@@ -6,10 +6,13 @@ x-airflow-common: &airflow-common
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:?set in .env}@postgres/${POSTGRES_DB:-airflow}
-    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:?set in .env}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:?set in .env}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
-    AWS_PROFILE: ${AWS_PROFILE:-default}
+    DBT_TARGET_PATH: /tmp/dbt/target
+    DBT_LOG_PATH: /tmp/dbt/logs
+    AWS_PROFILE: ${AWS_PROFILE:-nyc-taxi}
     AWS_REGION: ${AWS_REGION:-eu-west-3}
     AWS_DEFAULT_REGION: ${AWS_REGION:-eu-west-3}
     S3_BUCKET: ${S3_BUCKET:-merouane-nyc-taxi-raw-euw3-2026}
@@ -18,8 +21,11 @@ x-airflow-common: &airflow-common
   user: "${AIRFLOW_UID:-50000}:0"
   volumes:
     - ./dags:/opt/airflow/dags:ro
-    - .:/opt/project
-    - ~/.aws:/home/airflow/.aws:ro
+    - ./ingestion:/opt/project/ingestion:ro
+    - ./dbt:/opt/project/dbt:ro
+    - ./pyproject.toml:/opt/project/pyproject.toml:ro
+    # holds only the nyc-taxi profile (copy it from ~/.aws), not every host profile
+    - ./.aws-airflow:/home/airflow/.aws:ro
   depends_on:
     postgres:
       condition: service_healthy
@@ -47,8 +53,9 @@ services:
       - -c
       - >
         airflow db migrate &&
+        (airflow users list | grep -qw "$${AIRFLOW_ADMIN_USER}" ||
         airflow users create --username "$${AIRFLOW_ADMIN_USER}" --password "$${AIRFLOW_ADMIN_PASSWORD}"
-        --firstname Admin --lastname User --role Admin --email admin@example.com || true
+        --firstname Admin --lastname User --role Admin --email admin@example.com)
     environment:
       <<: *airflow-env
       AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
@@ -58,7 +65,7 @@ services:
     <<: *airflow-common
     command: webserver
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s

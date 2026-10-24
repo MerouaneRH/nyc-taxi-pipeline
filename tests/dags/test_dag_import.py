@@ -23,7 +23,7 @@ def test_task_ids(dagbag):
     dag = dagbag.dags.get(DAG_ID)
     assert dag is not None
     assert set(dag.task_ids) == {
-        "ingest_zones", "ingest_trips", "dbt_snapshot", "dbt_build",
+        "ingest_zones", "ingest_trips", "dbt_prepare", "dbt_snapshot", "dbt_build",
     }
 
 
@@ -31,7 +31,8 @@ def test_dependency_order(dagbag):
     dag = dagbag.dags.get(DAG_ID)
     down = {t: set(dag.get_task(t).downstream_task_ids) for t in dag.task_ids}
     assert down["ingest_zones"] == {"ingest_trips"}
-    assert down["ingest_trips"] == {"dbt_snapshot"}
+    assert down["ingest_trips"] == {"dbt_prepare"}
+    assert down["dbt_prepare"] == {"dbt_snapshot"}
     assert down["dbt_snapshot"] == {"dbt_build"}
     assert down["dbt_build"] == set()
 
