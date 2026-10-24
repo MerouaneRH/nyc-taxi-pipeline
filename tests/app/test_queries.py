@@ -84,3 +84,8 @@ def test_quality_query():
 def test_options_queries_bounded():
     for sql in (queries.PAYMENTS_SQL, queries.VENDORS_SQL):
         assert "mart_hourly_borough" in sql and "limit" in sql
+
+
+def test_top_routes_excludes_unknown_zone():
+    sql, _ = queries.build_top_routes_query(date(2024, 1, 5), date(2024, 2, 10), None, 20)
+    assert "pickup_zone <> 'N/A'" in sql and "dropoff_zone <> 'N/A'" in sql

@@ -171,3 +171,22 @@ def test_hour_charts_use_explicit_axes(view):
     assert not at.exception, at.exception
     assert not at.get("line_chart"), "auto-scaled line chart still used"
     assert at.get("vega_lite_chart"), "explicit altair chart missing"
+
+
+def test_borough_matrix_uses_log_color_scale():
+    import pandas as pd
+
+    from app.views.routes import borough_matrix_chart
+
+    spec = borough_matrix_chart(pd.DataFrame({"pickup_borough": ["A"], "dropoff_borough": ["B"],
+                                              "trips": [5]})).to_dict()
+    assert spec["encoding"]["color"]["scale"]["type"] == "log"
+
+
+def test_tips_cash_only_shows_message_not_blank_chart():
+    empty = _attr(pd.DataFrame({"pickup_hour": [0, 1], "card_tip_revenue": [0.0, 0.0],
+                                "card_fare_revenue": [0.0, 0.0]}))
+    at = _run("Tips", {"load_tips_by_hour": empty, "load_tips_by_borough": empty})
+    assert not at.exception, at.exception
+    assert any("no card payments" in (m.value or "").lower() for m in [*at.info, *at.warning])
+    assert not at.get("vega_lite_chart")

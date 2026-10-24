@@ -13,3 +13,15 @@ nyc_taxi:
       schema: "{{ env_var('DBT_SCHEMA', 'nyc_taxi_dbt') }}"
       threads: 4
       num_retries: 2
+    # CI target: no aws_profile_name, credentials come from the environment
+    # (GitHub OIDC role assumed by the dbt-build workflow).
+    ci:
+      type: athena
+      region_name: "{{ env_var('AWS_REGION', 'eu-west-3') }}"
+      s3_staging_dir: "{{ env_var('DBT_S3_STAGING_DIR', 's3://merouane-nyc-taxi-raw-euw3-2026/athena-results/') }}"
+      s3_data_dir: "{{ env_var('DBT_S3_DATA_DIR', 's3://merouane-nyc-taxi-raw-euw3-2026/warehouse/') }}"
+      work_group: "{{ env_var('DBT_ATHENA_WORKGROUP', 'nyc-taxi-dbt') }}"
+      database: awsdatacatalog
+      schema: "{{ env_var('DBT_SCHEMA', 'nyc_taxi_dbt') }}"
+      threads: 4
+      num_retries: 2

@@ -176,7 +176,9 @@ Python tests: `tests/ingestion`, `tests/app` and `tests/dags`. Counts change; se
 
 - `lint-test`: `ruff check .` and pytest excluding `tests/dags`.
 - `dag-tests`: installs Airflow 2.10.5 with its constraint file and runs `tests/dags`.
-- `dbt-parse`: `dbt deps` and `dbt parse` only. Models are never compiled or run against Athena in CI.
+- `dbt-parse`: `dbt deps` and `dbt parse` only. Pull-request CI never reaches Athena.
+
+`.github/workflows/dbt-build.yml` runs the real `dbt build` on Athena. It is triggered by pushes to `main` that touch `dbt/**` and by manual dispatch, never by pull requests. It assumes an AWS role through GitHub OIDC (no stored keys); the role ARN is the repository variable `AWS_DBT_ROLE_ARN`. It uses the `ci` target in `dbt/profiles.yml`, which has no AWS profile name, and runs `create_raw_tables`, `seed`, `snapshot` and `build` for 2024.
 
 ## Known limitations
 
@@ -186,7 +188,7 @@ Python tests: `tests/ingestion`, `tests/app` and `tests/dags`. Counts change; se
 - Vendor 7 is accepted in tests but unverified.
 - Incremental `fct_trips` is not yet faster than a full refresh at two months of data: 55 to 61 s and 49 + 145 MB scanned versus 54.8 s and 97 MB for full refresh (ADR 0007). Break-even is expected later and was not measured.
 - `avg_speed_mph` has 1502 implausible rows (200 mph or more). They are flagged by the warn-severity test `assert_plausible_speed`, not removed.
-- CI is parse-only for dbt (`dbt parse`) and has never run on GitHub. Model SQL and data tests are verified only by manual runs against AWS.
+- Pull-request CI is parse-only for dbt. The real `dbt build` runs only after a merge to `main` (or by manual dispatch), so a broken model reaches `main` before it is caught.
 - SCD2 (`dim_vendor` snapshot) was checked by hand once: renaming vendor 2 in the seed and re-running `dbt snapshot` closed the old row and opened a new one. There is no automated test for it.
 - The models use Athena/Trino functions (`date_diff`, `to_hex`, `md5(to_utf8(...))`, `day_of_week`) and hive/Iceberg `table_type` configs, so moving to another warehouse needs code changes, not only a new profile.
 - The Streamlit compose service is commented out; run the app with `uv run`.

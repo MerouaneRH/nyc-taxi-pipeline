@@ -18,6 +18,11 @@ def render(f: Filters) -> None:
     if by_hour.empty:
         st.warning("No trips for this selection.")
         return
+    if by_hour["card_fare_revenue"].fillna(0).sum() == 0:
+        st.info("No card payments in this selection. Tips are only recorded for card payments.",
+                icon=":material/info:")
+        scanned_caption(by_hour, "Hourly query")
+        return
     st.subheader("Tip % by hour")
     st.altair_chart(hour_line_chart(analytics.add_tip_pct(by_hour), "tip_pct", "Card tip % by hour"),
                     alt="Card tip percentage by pickup hour")

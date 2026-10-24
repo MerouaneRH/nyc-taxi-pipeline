@@ -150,6 +150,7 @@ def build_top_routes_query(
         "select pickup_zone, dropoff_zone, pickup_borough, dropoff_borough, "
         "sum(trips) as trips, sum(total_revenue) as total_revenue from mart_od_pairs "
         f"where {where} and pickup_zone is not null and dropoff_zone is not null "
+        "and pickup_zone <> 'N/A' and dropoff_zone <> 'N/A' "
         f"group by 1, 2, 3, 4 order by 5 desc limit {n}"
     )
     return sql, params
