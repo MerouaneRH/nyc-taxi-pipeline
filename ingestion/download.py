@@ -31,7 +31,9 @@ def download(url: str, dest: Path) -> Path:
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with requests.get(url, stream=True, timeout=60) as resp:
+    with requests.get(url, stream=True, timeout=60, allow_redirects=False) as resp:
+        if 300 <= resp.status_code < 400:
+            raise ValueError(f"refusing redirect ({resp.status_code}) from {url}")
         resp.raise_for_status()
         with open(tmp, "wb") as f:
             f.writelines(resp.iter_content(chunk_size=1 << 20))

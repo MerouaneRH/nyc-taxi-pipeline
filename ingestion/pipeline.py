@@ -8,6 +8,7 @@ Env: AWS_PROFILE (default nyc-taxi), S3_BUCKET (default below), region eu-west-3
 """
 
 import argparse
+import csv
 import os
 import sys
 import tempfile
@@ -44,10 +45,34 @@ YELLOW_REQUIRED_COLUMNS = [
     "total_amount",
 ]
 REQUIRED_COLUMNS = {"yellow": YELLOW_REQUIRED_COLUMNS}
+ZONES_COLUMNS = ["LocationID", "Borough", "Zone", "service_zone"]
+DEFAULT_MAX_BYTES = 2 * 1024**3
 
 
 class SchemaError(ValueError):
     """Parquet file is missing required columns."""
+
+
+class DownloadError(ValueError):
+    """Download refused: redirect, oversize, or length mismatch. Not retried."""
+
+
+def max_download_bytes() -> int:
+    return int(os.environ.get("MAX_DOWNLOAD_BYTES", DEFAULT_MAX_BYTES))
+
+
+def _refuse_redirect(resp: requests.Response) -> None:
+    if resp.is_redirect or 300 <= resp.status_code < 400:
+        raise DownloadError(f"refusing redirect ({resp.status_code}) from {resp.url}")
+
+
+def _check_declared(resp: requests.Response) -> int | None:
+    length = resp.headers.get("Content-Length")
+    if length is not None and int(length) > max_download_bytes():
+        raise DownloadError(
+            f"Content-Length {length} exceeds cap {max_download_bytes()}"
+        )
+    return int(length) if length is not None else None
 
 
 def bucket_name() -> str:
@@ -90,19 +115,41 @@ def _backoff(check):
 
 @_backoff(_retryable_http)
 def remote_size(url: str) -> int | None:
-    resp = requests.head(url, headers=HEADERS, timeout=30, allow_redirects=True)
+    resp = requests.head(url, headers=HEADERS, timeout=30, allow_redirects=False)
+    _refuse_redirect(resp)
     resp.raise_for_status()
     length = resp.headers.get("Content-Length")
     return int(length) if length else None
 
 
+def _write_capped(resp: requests.Response, dest: Path, declared: int | None) -> None:
+    cap, total = max_download_bytes(), 0
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=CHUNK):
+            total += len(chunk)
+            if total > cap:
+                raise DownloadError(f"download exceeds cap {cap} bytes")
+            if declared is not None and total > declared:
+                raise DownloadError(
+                    f"download exceeds declared Content-Length {declared}"
+                )
+            f.write(chunk)
+
+
 @_backoff(_retryable_http)
 def stream_to_file(url: str, dest: Path) -> None:
-    """Stream url to dest in chunks; memory use stays at one chunk."""
-    with requests.get(url, headers=HEADERS, stream=True, timeout=60) as resp:
+    """Stream url to dest in chunks; no redirects, size-capped, partial file removed on failure."""
+    with requests.get(
+        url, headers=HEADERS, stream=True, timeout=60, allow_redirects=False
+    ) as resp:
+        _refuse_redirect(resp)
         resp.raise_for_status()
-        with open(dest, "wb") as f:
-            f.writelines(resp.iter_content(chunk_size=CHUNK))
+        declared = _check_declared(resp)
+        try:
+            _write_capped(resp, dest, declared)
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
 
 
 @_backoff(_retryable_s3)
@@ -128,6 +175,17 @@ def validate_parquet(path: Path, service: str) -> None:
         raise SchemaError(f"{path.name} missing columns: {', '.join(missing)}")
 
 
+def validate_zones_csv(path: Path) -> None:
+    """Check the header row has exactly the expected columns."""
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        header = next(csv.reader(f), [])
+    if header != ZONES_COLUMNS:
+        missing = [c for c in ZONES_COLUMNS if c not in header]
+        raise SchemaError(
+            f"{path.name} header {header} != {ZONES_COLUMNS}; missing: {', '.join(missing)}"
+        )
+
+
 def _is_current(s3, bucket: str, key: str, url: str) -> bool:
     have = s3_size(s3, bucket, key)
     if have is None:
@@ -139,24 +197,29 @@ def _is_current(s3, bucket: str, key: str, url: str) -> bool:
     return want is None or want == have
 
 
-def _sync(s3, bucket: str, key: str, url: str, service: str | None) -> str:
+def _sync(s3, bucket: str, key: str, url: str, validate) -> str:
     if _is_current(s3, bucket, key, url):
         return "skipped"
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / Path(key).name
         stream_to_file(url, path)
-        if service:
-            validate_parquet(path, service)
+        validate(path)
         upload(s3, path, bucket, key)
     return "uploaded"
 
 
 def ingest_month(s3, bucket: str, service: str, month: str) -> str:
-    return _sync(s3, bucket, month_key(service, month), trip_url(service, month), service)
+    return _sync(
+        s3,
+        bucket,
+        month_key(service, month),
+        trip_url(service, month),
+        lambda p: validate_parquet(p, service),
+    )
 
 
 def ingest_zones(s3, bucket: str) -> str:
-    return _sync(s3, bucket, ZONES_KEY, ZONES_URL, None)
+    return _sync(s3, bucket, ZONES_KEY, ZONES_URL, validate_zones_csv)
 
 
 def _month(value: str) -> str:
@@ -165,10 +228,14 @@ def _month(value: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--service", choices=sorted(REQUIRED_COLUMNS), default="yellow")
     parser.add_argument("--months", nargs="+", default=[], type=_month)
-    parser.add_argument("--zones", action="store_true", help="also load taxi_zone_lookup.csv")
+    parser.add_argument(
+        "--zones", action="store_true", help="also load taxi_zone_lookup.csv"
+    )
     args = parser.parse_args(argv)
 
     s3, bucket = make_s3(), bucket_name()

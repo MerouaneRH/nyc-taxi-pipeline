@@ -17,6 +17,11 @@ REGION = "eu-west-3"
 ZONES_URL = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
 
 
+ZONES_CSV = (
+    b'"LocationID","Borough","Zone","service_zone"\n1,"EWR","Newark Airport","EWR"\n'
+)
+
+
 def parquet_bytes(columns=None) -> bytes:
     columns = columns or pipeline.YELLOW_REQUIRED_COLUMNS
     table = pa.table({c: pa.array([1]) for c in columns})
@@ -144,7 +149,9 @@ def test_s3_upload_retries(s3, monkeypatch):
     def flaky(*a, **k):
         calls.append(1)
         if len(calls) < 3:
-            raise ClientError({"Error": {"Code": "SlowDown", "Message": "x"}}, "PutObject")
+            raise ClientError(
+                {"Error": {"Code": "SlowDown", "Message": "x"}}, "PutObject"
+            )
         return real(*a, **k)
 
     monkeypatch.setattr(s3, "upload_file", flaky)
@@ -170,7 +177,7 @@ def test_s3_head_non_404_error_retried(s3, monkeypatch):
 
 @responses.activate
 def test_zones_upload_and_skip(s3):
-    csv = b'"LocationID","Borough"\n1,"EWR"\n'
+    csv = ZONES_CSV
     responses.add(responses.HEAD, ZONES_URL, headers={"Content-Length": str(len(csv))})
     responses.add(responses.GET, ZONES_URL, body=csv)
     assert pipeline.ingest_zones(s3, BUCKET) == "uploaded"
@@ -190,3 +197,107 @@ def test_cli(s3, monkeypatch, capsys):
 def test_cli_rejects_bad_month():
     with pytest.raises(SystemExit):
         pipeline.main(["--months", "2024-13", "--service", "yellow"])
+
+
+@responses.activate
+def test_redirect_not_followed(s3):
+    url = trip_url("yellow", "2024-01")
+    responses.add(responses.HEAD, url, headers={"Content-Length": "1"})
+    responses.add(
+        responses.GET, url, status=302, headers={"Location": "http://evil.example/x"}
+    )
+    with pytest.raises(pipeline.DownloadError, match="redirect"):
+        pipeline.ingest_month(s3, BUCKET, "yellow", "2024-01")
+    assert n_gets() == 1
+    assert list_keys(s3) == []
+
+
+@responses.activate
+def test_requests_disable_redirects(s3, monkeypatch):
+    seen = []
+    for name in ("get", "head"):
+        real = getattr(requests, name)
+
+        def spy(*a, _real=real, **k):
+            seen.append(k.get("allow_redirects"))
+            return _real(*a, **k)
+
+        monkeypatch.setattr(requests, name, spy)
+    mock_source(parquet_bytes())
+    pipeline.ingest_month(s3, BUCKET, "yellow", "2024-01")
+    assert seen and all(v is False for v in seen)
+
+
+def test_max_bytes_env(monkeypatch):
+    monkeypatch.delenv("MAX_DOWNLOAD_BYTES", raising=False)
+    assert pipeline.max_download_bytes() == 2 * 1024**3
+    monkeypatch.setenv("MAX_DOWNLOAD_BYTES", "123")
+    assert pipeline.max_download_bytes() == 123
+
+
+@responses.activate
+def test_content_length_over_cap_refused(s3, monkeypatch):
+    monkeypatch.setenv("MAX_DOWNLOAD_BYTES", "10")
+    url = trip_url("yellow", "2024-01")
+    responses.add(responses.HEAD, url, headers={"Content-Length": "5"})
+    responses.add(responses.GET, url, body=b"x" * 50, headers={"Content-Length": "50"})
+    with pytest.raises(pipeline.DownloadError, match="exceeds"):
+        pipeline.ingest_month(s3, BUCKET, "yellow", "2024-01")
+    assert list_keys(s3) == []
+
+
+class FakeResp:
+    """Server that lies about Content-Length (urllib3 would otherwise reject the mismatch)."""
+
+    status_code, is_redirect, url = (
+        200,
+        False,
+        "https://d37ci6vzurychx.cloudfront.net/x",
+    )
+
+    def __init__(self, declared, chunks):
+        self.headers = {"Content-Length": str(declared)}
+        self.chunks = chunks
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size):
+        yield from self.chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_get(monkeypatch, resp):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: resp)
+
+
+def test_stream_over_cap_aborts_and_deletes(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_DOWNLOAD_BYTES", "10")
+    _fake_get(monkeypatch, FakeResp(8, [b"x" * 6, b"x" * 6]))
+    dest = tmp_path / "f.bin"
+    with pytest.raises(pipeline.DownloadError, match="cap"):
+        pipeline.stream_to_file("https://d37ci6vzurychx.cloudfront.net/x", dest)
+    assert not dest.exists()
+
+
+def test_stream_over_declared_length_aborts(tmp_path, monkeypatch):
+    _fake_get(monkeypatch, FakeResp(5, [b"x" * 3, b"x" * 3]))
+    dest = tmp_path / "f.bin"
+    with pytest.raises(pipeline.DownloadError, match="declared"):
+        pipeline.stream_to_file("https://d37ci6vzurychx.cloudfront.net/x", dest)
+    assert not dest.exists()
+
+
+@responses.activate
+def test_zones_bad_header_not_uploaded(s3):
+    csv = b'"LocationID","Borough"\n1,"EWR"\n'
+    responses.add(responses.HEAD, ZONES_URL, headers={"Content-Length": str(len(csv))})
+    responses.add(responses.GET, ZONES_URL, body=csv)
+    with pytest.raises(pipeline.SchemaError, match="Zone"):
+        pipeline.ingest_zones(s3, BUCKET)
+    assert list_keys(s3) == []
