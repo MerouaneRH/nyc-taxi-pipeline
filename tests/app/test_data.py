@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app import data
 
@@ -66,9 +67,9 @@ def test_daily_query_parameterised_and_limited():
 
 
 def test_queries_without_borough_have_no_borough_param():
-    for build in (data.build_daily_query, data.build_heatmap_query):
+    for build, n in ((data.build_daily_query, 2), (data.build_heatmap_query, 4)):
         sql, params = build(date(2024, 1, 1), date(2024, 1, 2), None)
-        assert len(params) == 2 and "borough" not in sql.lower().split("where")[1]
+        assert len(params) == n and "borough" not in sql.lower().split("where")[1]
 
 
 def test_all_queries_have_limit():
@@ -83,9 +84,57 @@ def test_all_queries_have_limit():
     assert all("limit" in q.lower() for q in qs)
 
 
-def test_heatmap_filters_partition_date_in_fact_table():
-    sql, _ = data.build_heatmap_query(date(2024, 1, 1), date(2024, 1, 2), None)
-    assert "fct_trips" in sql and "pickup_date between" in sql
+def test_heatmap_prunes_partitions_with_month_predicate_and_param_order():
+    sql, params = data.build_heatmap_query(date(2024, 1, 15), date(2024, 3, 2), "Queens")
+    where = sql.split(" where ")[1].split(" group by ")[0]
+    assert sql.count(" from fct_trips ") == 1
+    assert where == (
+        "pickup_month between ? and ? "
+        "and pickup_date between cast(? as date) and cast(? as date) "
+        "and pickup_borough = ?"
+    )
+    assert params == ["'2024-01'", "'2024-03'", "'2024-01-15'", "'2024-03-02'", "'Queens'"]
+    assert where.count("?") == len(params)
+
+
+def test_heatmap_month_params_without_borough_cross_year():
+    _, params = data.build_heatmap_query(date(2023, 12, 31), date(2024, 1, 1), None)
+    assert params == ["'2023-12'", "'2024-01'", "'2023-12-31'", "'2024-01-01'"]
+
+
+def test_borough_rejects_trailing_newline():
+    with pytest.raises(ValueError):
+        data.validate_borough("Queens\n")
+
+
+def test_convert_int_with_nan_does_not_raise():
+    out = data._convert(pd.Series(["1", None, "3"]), "bigint")
+    assert out.isna().tolist() == [False, True, False]
+    assert out.dropna().tolist() == [1, 3]
+
+
+def test_convert_int_without_nan_is_int64():
+    assert data._convert(pd.Series(["1", "2"]), "bigint").dtype == "int64"
+
+
+def test_parse_bounds_empty_mart_returns_none():
+    c = _client({"cols": [("min_date", "date"), ("max_date", "date")], "data": [[None, None]]})
+    assert data.parse_bounds(data.run_query(c, data.BOUNDS_SQL)) is None
+
+
+def test_parse_bounds_ok():
+    c = _client({"cols": [("min_date", "date"), ("max_date", "date")],
+                 "data": [["2024-01-01", "2024-02-01"]]})
+    assert data.parse_bounds(data.run_query(c, data.BOUNDS_SQL)) == (date(2024, 1, 1), date(2024, 2, 1))
+
+
+def test_friendly_error_hides_arns_and_raw_text():
+    arn = "arn:aws:iam::123456789012:role/x"
+    boto = ClientError({"Error": {"Code": "AccessDenied", "Message": arn}}, "StartQueryExecution")
+    for exc in (boto, BotoCoreError(), data.QueryError(f"FAILED {arn}")):
+        msg = data.friendly_error(exc)
+        assert arn not in msg and "AccessDenied" not in msg and len(msg) < 120
+    assert data.friendly_error(ValueError("range exceeds 400 days")) == "range exceeds 400 days"
 
 
 def test_run_query_returns_typed_dataframe():

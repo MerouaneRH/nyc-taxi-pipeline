@@ -17,10 +17,15 @@ st.title("NYC taxi dashboard")
 
 try:
     boroughs = data.load_boroughs()
-    min_d, max_d = data.load_bounds()
+    bounds = data.load_bounds()
 except (BotoCoreError, ClientError, data.QueryError) as exc:
-    st.error(f"Cannot reach Athena: {exc}", icon=":material/error:")
+    st.error(data.friendly_error(exc), icon=":material/error:")
     st.stop()
+
+if bounds is None:
+    st.info("No data in the mart yet. Run the pipeline first.")
+    st.stop()
+min_d, max_d = bounds
 
 with st.sidebar:
     st.header("Filters")
@@ -37,8 +42,8 @@ start, end = picked
 try:
     daily = data.load_daily(start, end, borough)
     zones = data.load_zones(start, end, borough, top_n)
-except (data.QueryError, ValueError) as exc:
-    st.error(str(exc), icon=":material/error:")
+except (BotoCoreError, ClientError, data.QueryError, ValueError) as exc:
+    st.error(data.friendly_error(exc), icon=":material/error:")
     st.stop()
 
 if daily.empty:
@@ -62,8 +67,8 @@ st.subheader("Trips by hour and weekday")
 if st.toggle("Load heatmap (scans fct_trips)", value=True):
     try:
         heat = data.load_heatmap(start, end, borough)
-    except (data.QueryError, ValueError) as exc:
-        st.error(str(exc), icon=":material/error:")
+    except (BotoCoreError, ClientError, data.QueryError, ValueError) as exc:
+        st.error(data.friendly_error(exc), icon=":material/error:")
         st.stop()
     heat["weekday"] = heat["pickup_dow"].map(lambda i: DOW[i - 1])
     chart = (

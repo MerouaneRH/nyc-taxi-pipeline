@@ -3,7 +3,9 @@
 Safety: every user-controlled value is validated, then bound through Athena
 ExecutionParameters (`?`). SQL text is built only from constants and a
 validated integer LIMIT. Every query has a LIMIT. Heavy reads hit the small
-daily mart; only the heatmap touches fct_trips, always date-bounded.
+daily mart; only the heatmap touches fct_trips, always bounded by both a
+`pickup_month` (partition column, YYYY-MM string) range, so Athena prunes
+partitions, and an exact `pickup_date` range.
 """
 
 import os
@@ -24,7 +26,7 @@ MAX_POLLS = 240  # ~2 min
 MAX_RANGE_DAYS = 400
 MAX_LIMIT = 100
 TTL = 3600
-_BOROUGH_RE = re.compile(r"^[A-Za-z][A-Za-z /.-]{0,39}$")
+_BOROUGH_RE = re.compile(r"[A-Za-z][A-Za-z /.-]{0,39}")
 _INT_TYPES = {"tinyint", "smallint", "integer", "bigint"}
 _FLOAT_TYPES = {"float", "double", "decimal"}
 
@@ -55,7 +57,7 @@ def validate_range(start: date, end: date) -> tuple[date, date]:
 def validate_borough(borough: str | None) -> str | None:
     if borough is None or borough == "All":
         return None
-    if not isinstance(borough, str) or not _BOROUGH_RE.match(borough):
+    if not isinstance(borough, str) or not _BOROUGH_RE.fullmatch(borough):
         raise ValueError("invalid borough")
     return borough
 
@@ -102,16 +104,18 @@ def build_zones_query(
 
 def build_heatmap_query(start: date, end: date, borough: str | None) -> tuple[str, list[str]]:
     where, params = _filter(start, end, borough)
+    months = [f"'{start:%Y-%m}'", f"'{end:%Y-%m}'"]
     sql = (
         "select pickup_dow, pickup_hour, count(*) as trips from fct_trips "
-        f"where {where} group by 1, 2 order by 1, 2 limit 200"
+        f"where pickup_month between ? and ? and {where} group by 1, 2 order by 1, 2 limit 200"
     )
-    return sql, params
+    return sql, [*months, *params]
 
 
 def _convert(series: pd.Series, athena_type: str) -> pd.Series:
     if athena_type in _INT_TYPES:
-        return pd.to_numeric(series).astype("int64")
+        nums = pd.to_numeric(series)
+        return nums.astype("Int64") if nums.isna().any() else nums.astype("int64")
     if athena_type in _FLOAT_TYPES:
         return pd.to_numeric(series).astype("float64")
     if athena_type == "date":
@@ -170,6 +174,23 @@ def compute_kpis(daily: pd.DataFrame) -> dict:
     return {"trips": trips, "revenue": revenue, "avg_tip_pct": 100 * tip / fare if fare else 0.0}
 
 
+def parse_bounds(df: pd.DataFrame) -> tuple[date, date] | None:
+    """(min, max) pickup dates, or None when the mart is empty."""
+    if df.empty or df["min_date"].isna().all() or df["max_date"].isna().all():
+        return None
+    row = df.iloc[0]
+    return row["min_date"], row["max_date"]
+
+
+def friendly_error(exc: Exception) -> str:
+    """Short UI-safe message; never leaks ARNs or raw AWS/Athena text."""
+    if isinstance(exc, ValueError):
+        return str(exc)
+    if isinstance(exc, QueryError):
+        return "The query failed or timed out. Try a smaller date range."
+    return "Cannot reach Athena. Check AWS credentials and try again."
+
+
 @st.cache_resource
 def get_client():
     session = boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "nyc-taxi"), region_name=REGION)
@@ -182,9 +203,8 @@ def load_boroughs() -> list[str]:
 
 
 @st.cache_data(ttl=TTL, max_entries=4, show_spinner="Loading date bounds...")
-def load_bounds() -> tuple[date, date]:
-    row = run_query(get_client(), BOUNDS_SQL).iloc[0]
-    return row["min_date"], row["max_date"]
+def load_bounds() -> tuple[date, date] | None:
+    return parse_bounds(run_query(get_client(), BOUNDS_SQL))
 
 
 @st.cache_data(ttl=TTL, max_entries=32, show_spinner="Querying daily revenue...")
