@@ -25,6 +25,16 @@ dbt snapshot --profiles-dir . --target athena
 dbt build    --profiles-dir . --target athena
 ```
 
+Incremental month (ADR 0007). `fct_trips` is partitioned by month. To process only one month:
+
+```bash
+dbt build --select 'stg_trips+' --profiles-dir . --target athena --vars '{run_month: "2024-03"}'
+```
+
+`run_month` must be `YYYY-MM` inside `min_year..max_year`, else compilation fails. Without `run_month`, all partitions in range are rewritten. After a change to `fct_trips` columns or the first run, use `dbt build --full-refresh`.
+
+Athena workgroup (ADR 0007): dbt uses `nyc-taxi-dbt` (`DBT_ATHENA_WORKGROUP`), capped at 5 GiB scanned per query. Create it once with `AWS_PROFILE=nyc-taxi uv run python dbt/scripts/create_workgroup.py`. If it does not exist yet, set `DBT_ATHENA_WORKGROUP=primary` (and `ATHENA_WORKGROUP=primary` for the app).
+
 Output per file is `uploaded` or `skipped`. `skipped` means the S3 size equals the source size (ADR 0005).
 
 Staging reads only `min_year` to `max_year` (2024 to 2024 by default). For another year:
@@ -110,7 +120,7 @@ For the database and admin passwords, change `.env`. Postgres keeps the old pass
 The two errors in the table below were seen in practice. The rest of this list is a typical set for this setup and was not checked action by action. The profile needs, on the bucket and prefixes used here:
 
 - S3: `GetObject`, `PutObject`, `ListBucket`, `GetBucketLocation` on the bucket; `PutObject` and `DeleteObject` under `warehouse/` and `athena-results/`.
-- Athena: `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup`.
+- Athena: `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup`. Creating the workgroup also needs `CreateWorkGroup` (and `UpdateWorkGroup` for reruns of the script); the `nyc-taxi` profile was denied `CreateWorkGroup` and `ListQueryExecutions`.
 - Glue: database and table create/read/update/delete on `nyc_taxi_raw` and `nyc_taxi_dbt`, including `GetTableVersions`, `GetPartitions`, `BatchCreatePartition`.
 
 ## Troubleshooting

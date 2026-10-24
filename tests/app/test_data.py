@@ -93,7 +93,7 @@ def test_run_query_returns_typed_dataframe():
                  "data": [["2024-01-01", "5", "10.5", "JFK"]]})
     df = data.run_query(c, "select 1 limit 1", ["'x'"])
     kw = c.start_query_execution.call_args.kwargs
-    assert kw["WorkGroup"] == "primary" and kw["ExecutionParameters"] == ["'x'"]
+    assert kw["WorkGroup"] == "nyc-taxi-dbt" and kw["ExecutionParameters"] == ["'x'"]
     assert kw["ResultConfiguration"]["OutputLocation"].startswith("s3://")
     assert df.loc[0, "trips"] == 5 and df.loc[0, "rev"] == 10.5 and df.loc[0, "z"] == "JFK"
     assert df.attrs["scanned_bytes"] == 1234
