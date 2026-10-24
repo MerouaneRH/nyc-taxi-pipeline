@@ -111,7 +111,7 @@ ingestion/
   soda.py       local pull from the NYC Open Data SODA API to data/raw/soda
 dbt/
   models/staging/   stg_trips, stg_zones
-  models/marts/     dim_zone, fct_trips, mart_daily_zone_revenue, mart_hourly_borough, mart_od_pairs, mart_month_quality
+  models/marts/     dim_zone, fct_trips, mart_daily_zone_revenue, mart_hourly_borough, mart_od_pairs, mart_month_quality, dq_suspect_trips, mart_dq_summary
   snapshots/        dim_vendor (SCD2, Iceberg)
   seeds/            vendors.csv
   macros/           create_raw_tables (Glue database + external tables)
@@ -140,7 +140,9 @@ docs/               architecture.md, sop.md, adr/
 | `mart_daily_zone_revenue` | table (hive, parquet) | Trips and revenue per pickup zone per day |
 | `mart_hourly_borough` | incremental (hive, parquet, `insert_overwrite`, partitioned by `pickup_month`) | Per day, hour, borough, payment type and vendor: trips, revenue, distance and duration sums, card-only fare and tip sums (cash tips are not recorded) |
 | `mart_od_pairs` | incremental (same pattern) | Per month, pickup zone and dropoff zone: trips, revenue, distance and duration sums |
-| `mart_month_quality` | table | Per month: raw rows, staged rows, dropped rows and percent, implausible-speed rows |
+| `mart_month_quality` | table | Per month: raw rows, staged rows, dropped rows and percent, implausible-speed rows, dropped rows by rule (negative totals, dropoff before pickup, 24h or more, pickup outside the month), the negative-total sum, and trips with a missing passenger count |
+| `dq_suspect_trips` | incremental (same pattern) | One row per suspect trip (flagged, never deleted), with a primary `reason_code`, all matching `reason_codes`, and the likely broken field (`suspect_field`) |
+| `mart_dq_summary` | table | Per month and reason: trips, share of the month, money on the flagged rows |
 
 Cost control: `min_year` and `max_year` vars (both 2024 in
 `dbt_project.yml`) restrict which partitions staging scans. Override with
@@ -160,6 +162,10 @@ dbt tests (`data_tests` in the yml files):
 - `dim_vendor.vendor_id` and `vendor_name`: not_null.
 - Singular test `assert_dropoff_after_pickup`: no `fct_trips` row with dropoff before pickup.
 - Singular test `assert_plausible_speed` (severity `warn`): `avg_speed_mph` of 200 or more is reported, not blocking.
+
+Suspect trips (`dq_suspect_trips`) are flagged by rules with thresholds set in `dbt_project.yml` (`dq_*` vars): `DISTANCE_ABSURD` (100 miles or more), `SPEED_IMPLAUSIBLE` (100 mph or more), `TIMESTAMP_SUSPECT` (under 60 seconds and at least 1 mile), `ZERO_DISTANCE_PAID` (0 miles and a fare of $10 or more), `LONG_DURATION` (12 hours or more), `ZERO_TOTAL`. Each trip is counted once, under its first matching reason. Flagged trips stay in revenue; only speed and efficiency metrics should leave them out. The thresholds are judgment calls. The dashboard's Data quality view shows the counts, an explanation per reason, and up to 200 example trips with a CSV download.
+
+Negative totals are refunds and adjustments (mostly dispute, cash and no-charge payments), not bad records. Staging drops them, so revenue ignores them. For January and February 2024 they sum to about -$1.8M.
 
 Row filters in `stg_trips` (rows removed, not flagged): null pickup, dropoff
 before pickup, duration of 24 hours or more, negative distance or total, and

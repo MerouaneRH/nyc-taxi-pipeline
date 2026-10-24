@@ -27,8 +27,10 @@ def _config() -> dict:
         "trip_duration_min": nc("Duration (min)", format="%.1f"),
         "trip_distance_miles": nc("Distance (mi)", format="%.1f"),
         "avg_speed_mph": nc("Speed (mph)", format="%.0f"),
-        "total_amount": nc("Total", format="dollar"), "fare_amount": nc("Fare", format="dollar"),
-        "tip_amount": nc("Tip", format="dollar"), "passenger_count": nc("Passengers", format="%d"),
+        "total_amount": nc("Total", format="dollar", width="medium"),
+        "fare_amount": nc("Fare", format="dollar", width="medium"),
+        "tip_amount": nc("Tip", format="dollar", width="medium"),
+        "passenger_count": nc("Passengers", format="%d"),
         "payment_type_name": "Payment", "vendor_name": "Vendor",
         "suspect_field": "Suspect field", "reason_codes": "Reason codes", "trip_id": "Trip id",
     }

@@ -89,3 +89,11 @@ def test_lazy_dq_loaders_not_called_outside_view():
     with patch.object(loaders, "load_dq_summary") as m:
         _run("Tips")
         assert not m.called
+
+
+def test_money_columns_are_wide_enough_for_large_fares():
+    from app.views.quality_drill import _config
+
+    cfg = _config()
+    for col in ("total_amount", "fare_amount", "tip_amount"):
+        assert cfg[col].get("width") in ("medium", "large"), col
