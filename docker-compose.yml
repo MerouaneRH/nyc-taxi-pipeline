@@ -96,20 +96,25 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Streamlit app: app/ is built later. Uncomment once app/main.py exists.
+  # Streamlit app: app/ exists (app/main.py). Uncomment to run it on :8501.
+  # The image runs as uid 10001 with no home dir, so point the AWS SDK at the mount.
   # streamlit:
   #   build:
   #     context: .
   #     dockerfile: docker/streamlit.Dockerfile
   #   environment:
-  #     AWS_PROFILE: ${AWS_PROFILE:-default}
+  #     AWS_PROFILE: nyc-taxi
   #     AWS_REGION: ${AWS_REGION:-eu-west-3}
   #     S3_BUCKET: ${S3_BUCKET:-merouane-nyc-taxi-raw-euw3-2026}
+  #     HOME: /tmp
+  #     AWS_SHARED_CREDENTIALS_FILE: /opt/aws/credentials
+  #     AWS_CONFIG_FILE: /opt/aws/config
   #   volumes:
   #     - .:/opt/project:ro
-  #     - ~/.aws:/root/.aws:ro
+  #     # world-readable copy needed: container uid 10001 must be able to read the files
+  #     - ./.aws-airflow:/opt/aws:ro
   #   ports:
-  #     - "8501:8501"
+  #     - "127.0.0.1:8501:8501"
 
 volumes:
   postgres-db:

@@ -45,7 +45,9 @@ with DAG(
     ingest_zones = _bash("ingest_zones", f"{PY} -m ingestion.pipeline --zones")
     ingest_trips = _bash(
         "ingest_trips",
-        f"{PY} -m ingestion.pipeline --months {MONTH} --service yellow",
+        f"{PY} -m ingestion.pipeline --months {MONTH} --service yellow --skip-unpublished",
+        # exit 99 = month not published yet (contract with ingestion): skip, don't fail
+        skip_on_exit_code=99,
     )
     dbt_cmd = f"{DBT} {{sub}} --project-dir {DBT_DIR} --profiles-dir {DBT_DIR} --target athena"
     # idempotent setup: raw external tables (CREATE ... IF NOT EXISTS) and the vendors seed
@@ -57,7 +59,7 @@ with DAG(
     dbt_snapshot = _bash("dbt_snapshot", f"{dbt_cmd.format(sub='snapshot')} {VARS}")
     dbt_build = _bash(
         "dbt_build",
-        f"{dbt_cmd.format(sub='build')} --select stg_trips+ {BUILD_VARS}",
+        f"{dbt_cmd.format(sub='build')} --select stg_zones+ stg_trips+ {BUILD_VARS}",
     )
 
     ingest_zones >> ingest_trips >> dbt_prepare >> dbt_snapshot >> dbt_build
