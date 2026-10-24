@@ -26,3 +26,6 @@ dbt = [
     "dbt-athena-community>=1.11.1",
     "dbt-core>=1.12.6",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = ["BLE001"]
