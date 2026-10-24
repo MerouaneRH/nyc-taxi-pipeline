@@ -151,3 +151,23 @@ def test_unexpected_view_error_is_friendly_and_logged(view, loader, caplog):
     msg = at.error[0].value
     assert "KeyError" not in msg and "Traceback" not in msg and ".py" not in msg
     assert "unexpected" in msg.lower() or "log" in msg.lower()
+
+
+def test_hour_line_chart_pins_axes():
+    import pandas as pd
+
+    from app.views.common import hour_line_chart
+
+    spec = hour_line_chart(pd.DataFrame({"pickup_hour": range(24), "v": range(24)}), "v", "t").to_dict()
+    enc = spec["layer"][0]["encoding"] if "layer" in spec else spec["encoding"]
+    assert enc["x"]["scale"]["domain"] == [0, 23]
+    assert enc["x"]["axis"]["tickMinStep"] == 1
+    assert enc["y"]["scale"]["zero"] is True
+
+
+@pytest.mark.parametrize("view", ["Tips", "Efficiency"])
+def test_hour_charts_use_explicit_axes(view):
+    at = _run(view)
+    assert not at.exception, at.exception
+    assert not at.get("line_chart"), "auto-scaled line chart still used"
+    assert at.get("vega_lite_chart"), "explicit altair chart missing"

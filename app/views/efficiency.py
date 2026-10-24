@@ -2,7 +2,7 @@ import streamlit as st
 
 from app import analytics, loaders
 from app.queries import Filters
-from app.views.common import fetch, scanned_caption
+from app.views.common import fetch, hour_line_chart, scanned_caption
 
 
 def _with_ratios(df):
@@ -22,7 +22,8 @@ def render(f: Filters) -> None:
     for col, label in (("revenue_per_mile", "Revenue per mile"),
                        ("revenue_per_min", "Revenue per minute")):
         st.subheader(f"{label} by hour")
-        st.line_chart(hour, x="pickup_hour", y=col, alt=f"{label} by pickup hour")
+        st.altair_chart(hour_line_chart(hour, col, f"{label} by hour"),
+                        alt=f"{label} by pickup hour")
         st.subheader(f"{label} by borough")
         st.bar_chart(borough, x="pickup_borough", y=col, alt=f"{label} by pickup borough")
     scanned_caption(by_hour, "Hourly query")

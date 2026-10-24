@@ -2,7 +2,7 @@ import streamlit as st
 
 from app import analytics, loaders
 from app.queries import Filters
-from app.views.common import fetch, scanned_caption
+from app.views.common import fetch, hour_line_chart, scanned_caption
 
 
 def render(f: Filters) -> None:
@@ -19,8 +19,8 @@ def render(f: Filters) -> None:
         st.warning("No trips for this selection.")
         return
     st.subheader("Tip % by hour")
-    st.line_chart(analytics.add_tip_pct(by_hour), x="pickup_hour", y="tip_pct",
-                  alt="Card tip percentage by pickup hour")
+    st.altair_chart(hour_line_chart(analytics.add_tip_pct(by_hour), "tip_pct", "Card tip % by hour"),
+                    alt="Card tip percentage by pickup hour")
     st.subheader("Tip % by borough")
     st.bar_chart(analytics.add_tip_pct(by_borough), x="pickup_borough", y="tip_pct",
                  alt="Card tip percentage by pickup borough")
