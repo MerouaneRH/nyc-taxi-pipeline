@@ -55,7 +55,7 @@ flowchart LR
 
 ## Local runtime (Docker Compose)
 
-Services: `postgres` (16.4), `airflow-init` (db migrate, admin user), `airflow-webserver` (port 8080), `airflow-scheduler`. Executor is `LocalExecutor`. The webserver binds `127.0.0.1:8080`. Mounts (all read-only): `./dags`, `./ingestion` and `./dbt` and `./pyproject.toml` under `/opt/project`, and `./.aws-airflow` (gitignored, only the `nyc-taxi` profile) at `/home/airflow/.aws`. `AWS_PROFILE` is fixed to `nyc-taxi`. `.env` must set the Postgres and admin passwords, the Fernet key and the webserver secret key (template: `.env.example`, or `env.template` until renamed). The Streamlit service is commented out.
+Services: `postgres` (16.4), `airflow-init` (db migrate, admin user), `airflow-webserver` (port 8080), `airflow-scheduler`. Executor is `LocalExecutor`. The webserver binds `127.0.0.1:8080`. Mounts (all read-only): `./dags`, `./ingestion` and `./dbt` and `./pyproject.toml` under `/opt/project`, and `./.aws-airflow` (gitignored, only the `nyc-taxi` profile) at `/home/airflow/.aws`. `AWS_PROFILE` is fixed to `nyc-taxi`. `.env` must set the Postgres and admin passwords, the Fernet key and the webserver secret key (template: `.env.example`). The Streamlit service is commented out.
 
 ## CI
 

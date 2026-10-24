@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context and problem
 
-The project needs a SQL engine for dbt models. Budget is about $100 of credit. The owner has prior Snowflake experience.
+The project needs a SQL engine for dbt models, with a small, predictable cost and no extra account to provision.
 
 ## Options
 

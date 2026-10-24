@@ -47,7 +47,7 @@ dbt build --profiles-dir . --target athena --vars '{min_year: 2025, max_year: 20
 ## Run through Airflow
 
 ```bash
-cp .env.example .env     # or env.template if not yet renamed
+cp .env.example .env
 # set POSTGRES_PASSWORD, AIRFLOW_ADMIN_PASSWORD, AIRFLOW__CORE__FERNET_KEY, AIRFLOW__WEBSERVER__SECRET_KEY
 mkdir -p .aws-airflow    # copy only the nyc-taxi profile from ~/.aws into it (credentials + config); gitignored
 docker compose up --build -d

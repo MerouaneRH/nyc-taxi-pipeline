@@ -56,7 +56,7 @@ with access to the bucket, Glue and Athena. Required IAM actions are listed in
 ```bash
 # 1. Python deps and tests (no AWS needed)
 uv sync
-uv run pytest tests --ignore=tests/dags
+uv run --group app pytest tests --ignore=tests/dags
 uv run ruff check .
 
 # 2. Load one month into S3
@@ -66,16 +66,14 @@ uv run python -m ingestion.pipeline --service yellow --months 2024-01
 
 # 3. Create Glue tables, then build models (from dbt/)
 cd dbt
-dbt deps --profiles-dir . --target athena
-dbt run-operation create_raw_tables --profiles-dir . --target athena
-dbt seed     --profiles-dir . --target athena
-dbt snapshot --profiles-dir . --target athena
-dbt build    --profiles-dir . --target athena
+uv run --group dbt dbt run-operation create_raw_tables --profiles-dir . --target athena
+uv run --group dbt dbt seed     --profiles-dir . --target athena
+uv run --group dbt dbt snapshot --profiles-dir . --target athena
+uv run --group dbt dbt build    --profiles-dir . --target athena
 ```
 
-dbt needs `dbt-core` and `dbt-athena` installed. The `dbt` dependency group in
-`pyproject.toml` lists them, so use `uv sync --group dbt` and prefix commands
-with `uv run`.
+`tests/dags` needs Apache Airflow, which conflicts with the project's
+`requests` pin, so CI runs it in a separate job (see CI below).
 
 Streamlit app (needs AWS access to the mart):
 
@@ -90,7 +88,7 @@ errors are shown as generic messages. The compose service is commented out.
 Local Airflow:
 
 ```bash
-cp .env.example .env        # or env.template, if the file has not been renamed yet
+cp .env.example .env
 # set POSTGRES_PASSWORD, AIRFLOW_ADMIN_PASSWORD, AIRFLOW__CORE__FERNET_KEY,
 # AIRFLOW__WEBSERVER__SECRET_KEY
 docker compose up --build   # UI at http://localhost:8080
@@ -186,18 +184,9 @@ Python tests: `tests/ingestion`, `tests/app` and `tests/dags`. Counts change; se
 - Incremental `fct_trips` is not yet faster than a full refresh at two months of data: 55 to 61 s and 49 + 145 MB scanned versus 54.8 s and 97 MB for full refresh (ADR 0007). Break-even is expected later and was not measured.
 - `avg_speed_mph` has 1502 implausible rows (200 mph or more). They are flagged by the warn-severity test `assert_plausible_speed`, not removed.
 - CI is parse-only for dbt (`dbt parse`) and has never run on GitHub. Model SQL and data tests are verified only by manual runs against AWS.
-- The SCD2 mechanism (`dim_vendor` snapshot) is present, but no history change has been exercised.
-- A Snowflake migration needs function swaps and is untested.
+- SCD2 (`dim_vendor` snapshot) was checked by hand once: renaming vendor 2 in the seed and re-running `dbt snapshot` closed the old row and opened a new one. There is no automated test for it.
+- The models use Athena/Trino functions (`date_diff`, `to_hex`, `md5(to_utf8(...))`, `day_of_week`) and hive/Iceberg `table_type` configs, so moving to another warehouse needs code changes, not only a new profile.
 - The Streamlit compose service is commented out; run the app with `uv run`.
 - Single environment, no staging/prod split, no alerting beyond Airflow retries (3 retries, exponential backoff, 5 minute delay).
 - `download.py` and `soda.py` write to local `data/raw` and are not part of the DAG.
-- Default bucket name and profile are hard-coded in `ingestion/pipeline.py` and `dbt/profiles.yml`; override with `S3_BUCKET`, `AWS_PROFILE`, `DBT_S3_STAGING_DIR`, `DBT_S3_DATA_DIR`.
-
-## Interview talking points
-
-- Story: monthly files land in S3 untouched, so the raw layer can be replayed. Transformations are SQL in dbt with tests, run by a scheduler with retries, the same shape as a warehouse ELT at work.
-- Idempotency: re-running a month is safe because ingestion skips files whose S3 size equals the source `Content-Length`, and dbt models are rebuilt from raw. Known weakness: equal size with different content is not detected (ADR 0005).
-- SCD2 without a warehouse feature: `dbt snapshot` with the `check` strategy gives history on vendor names. Athena needs Iceberg for the MERGE this requires (ADR 0003).
-- Cost: Athena bills per data scanned. Partition projection and the `year` predicate in `stg_trips` limit the scan to the configured years (ADR 0002), and the `nyc-taxi-dbt` workgroup caps a query at 5 GiB (ADR 0007).
-- Snowflake migration: the models use Athena/Trino SQL functions (`date_diff`, `to_hex`, `md5(to_utf8(...))`, `day_of_week`). Moving to Snowflake means a new `dbt-snowflake` profile in `profiles.yml`, replacing those functions (for example with `datediff`, `md5`, `dayofweek`), removing the hive/Iceberg `table_type` configs, and replacing the Glue external tables with Snowflake external tables or `COPY INTO`. The model structure, tests and DAG stay. This is an estimate; no Snowflake run was done.
-- Trade-offs I can discuss: size-based skip versus checksums, CI without secrets versus real integration tests, and why `dbt_prepare` runs `create_raw_tables` and `dbt seed` on every run.
+- Default bucket name and profile are hard-coded in `ingestion/pipeline.py`, `app/data.py`, `dbt/profiles.yml` and the `create_raw_tables` macro; override with `S3_BUCKET`, `AWS_PROFILE`, `DBT_S3_STAGING_DIR`, `DBT_S3_DATA_DIR`.

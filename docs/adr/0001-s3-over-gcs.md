@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context and problem
 
-The raw TLC files need object storage. The project owner has an AWS account and no GCP account set up.
+The raw TLC files need object storage. The project runs on an existing AWS account, and no GCP account is set up.
 
 ## Options
 
