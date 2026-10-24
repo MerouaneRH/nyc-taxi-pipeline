@@ -29,6 +29,8 @@ DEFAULT_PROFILE = "nyc-taxi"
 ZONES_KEY = "raw/zones/taxi_zone_lookup.csv"
 ZONES_URL = f"{BASE_URL}/misc/taxi_zone_lookup.csv"
 MAX_ATTEMPTS = 5
+EXIT_UNPUBLISHED = 99  # contract with the DAG: BashOperator skip_on_exit_code=99
+UNPUBLISHED_STATUSES = {403, 404}
 CHUNK = 1 << 20
 HEADERS = {"Accept-Encoding": "identity"}
 
@@ -95,7 +97,20 @@ def _retryable_http(exc: BaseException) -> bool:
     if isinstance(exc, requests.HTTPError):
         status = exc.response.status_code
         return status >= 500 or status == 429
-    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+    return isinstance(
+        exc,
+        (
+            requests.ConnectionError,
+            requests.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
+        ),
+    )
+
+
+def _is_unpublished(exc: requests.HTTPError) -> bool:
+    resp = exc.response
+    return resp is not None and resp.status_code in UNPUBLISHED_STATUSES
 
 
 def _retryable_s3(exc: BaseException) -> bool:
@@ -134,6 +149,8 @@ def _write_capped(resp: requests.Response, dest: Path, declared: int | None) -> 
                     f"download exceeds declared Content-Length {declared}"
                 )
             f.write(chunk)
+    if declared is not None and total < declared:
+        raise DownloadError(f"incomplete download: got {total} of {declared} bytes")
 
 
 @_backoff(_retryable_http)
@@ -236,15 +253,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--zones", action="store_true", help="also load taxi_zone_lookup.csv"
     )
+    parser.add_argument(
+        "--skip-unpublished",
+        action="store_true",
+        help=f"on HTTP 403/404 log 'unpublished <url>' and exit {EXIT_UNPUBLISHED} "
+        "after other work, instead of raising",
+    )
     args = parser.parse_args(argv)
+    if not args.zones and not args.months:
+        parser.error("nothing to do: pass --zones and/or --months")
 
     s3, bucket = make_s3(), bucket_name()
+    unpublished = False
     if args.zones:
-        print(f"{ingest_zones(s3, bucket):9} s3://{bucket}/{ZONES_KEY}")
+        unpublished |= _run(
+            args, ZONES_URL, ZONES_KEY, bucket, lambda: ingest_zones(s3, bucket)
+        )
     for month in args.months:
-        result = ingest_month(s3, bucket, args.service, month)
-        print(f"{result:9} s3://{bucket}/{month_key(args.service, month)}")
-    return 0
+        key = month_key(args.service, month)
+        unpublished |= _run(
+            args,
+            trip_url(args.service, month),
+            key,
+            bucket,
+            lambda m=month: ingest_month(s3, bucket, args.service, m),
+        )
+    return EXIT_UNPUBLISHED if unpublished else 0
+
+
+def _run(args, url: str, key: str, bucket: str, action) -> bool:
+    """Run one unit of work; True if skipped as unpublished."""
+    try:
+        result = action()
+    except requests.HTTPError as exc:
+        if not (args.skip_unpublished and _is_unpublished(exc)):
+            raise
+        print(f"unpublished {url}", file=sys.stderr)
+        return True
+    print(f"{result:9} s3://{bucket}/{key}")
+    return False
 
 
 if __name__ == "__main__":

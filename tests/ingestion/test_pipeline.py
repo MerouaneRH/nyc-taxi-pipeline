@@ -301,3 +301,99 @@ def test_zones_bad_header_not_uploaded(s3):
     with pytest.raises(pipeline.SchemaError, match="Zone"):
         pipeline.ingest_zones(s3, BUCKET)
     assert list_keys(s3) == []
+
+
+# --- review fixes: H2 unpublished, M2 mid-stream retry, L6 CLI/length ---
+
+
+def _cli_env(s3, monkeypatch):
+    monkeypatch.setattr(pipeline, "make_s3", lambda: s3)
+    monkeypatch.setenv("S3_BUCKET", BUCKET)
+
+
+@responses.activate
+@pytest.mark.parametrize("status", [403, 404])
+def test_skip_unpublished_exits_99(s3, monkeypatch, capsys, status):
+    _cli_env(s3, monkeypatch)
+    url = trip_url("yellow", "2030-01")
+    responses.add(responses.HEAD, url, status=status)
+    responses.add(responses.GET, url, status=status)
+    code = pipeline.main(["--months", "2030-01", "--skip-unpublished"])
+    assert code == pipeline.EXIT_UNPUBLISHED == 99
+    assert f"unpublished {url}" in capsys.readouterr().err
+    assert n_gets() == 1  # never retried
+    assert list_keys(s3) == []
+
+
+@responses.activate
+def test_skip_unpublished_still_processes_other_months(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    bad = trip_url("yellow", "2030-01")
+    responses.add(responses.HEAD, bad, status=403)
+    responses.add(responses.GET, bad, status=403)
+    mock_source(parquet_bytes(), "2024-01")
+    code = pipeline.main(["--months", "2030-01", "2024-01", "--skip-unpublished"])
+    assert code == 99
+    assert list_keys(s3) == [pipeline.month_key("yellow", "2024-01")]
+
+
+@responses.activate
+@pytest.mark.parametrize("status", [403, 404])
+def test_unpublished_without_flag_raises(s3, monkeypatch, status):
+    _cli_env(s3, monkeypatch)
+    url = trip_url("yellow", "2030-01")
+    responses.add(responses.HEAD, url, status=status)
+    responses.add(responses.GET, url, status=status)
+    with pytest.raises(requests.HTTPError):
+        pipeline.main(["--months", "2030-01"])
+    assert n_gets() == 1
+
+
+@responses.activate
+def test_skip_unpublished_does_not_swallow_500(s3, monkeypatch):
+    _cli_env(s3, monkeypatch)
+    url = trip_url("yellow", "2030-01")
+    responses.add(responses.HEAD, url, status=500)
+    responses.add(responses.GET, url, status=500)
+    with pytest.raises(requests.HTTPError):
+        pipeline.main(["--months", "2030-01", "--skip-unpublished"])
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        requests.exceptions.ChunkedEncodingError("reset"),
+        requests.exceptions.ContentDecodingError("bad"),
+    ],
+)
+def test_midstream_reset_retries_then_succeeds(tmp_path, monkeypatch, exc):
+    attempts = []
+
+    class Flaky(FakeResp):
+        def iter_content(self, chunk_size):
+            attempts.append(1)
+            if len(attempts) < 3:
+                yield b"xx"
+                raise exc
+            yield from self.chunks
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: Flaky(4, [b"xx", b"xx"]))
+    dest = tmp_path / "f.bin"
+    pipeline.stream_to_file("https://d37ci6vzurychx.cloudfront.net/x", dest)
+    assert len(attempts) == 3
+    assert dest.read_bytes() == b"xxxx"
+
+
+def test_no_zones_no_months_is_usage_error(capsys):
+    with pytest.raises(SystemExit) as e:
+        pipeline.main([])
+    assert e.value.code != 0
+    assert "--zones" in capsys.readouterr().err
+
+
+def test_stream_under_length_raises_and_deletes(tmp_path, monkeypatch):
+    _fake_get(monkeypatch, FakeResp(10, [b"x" * 3, b"x" * 3]))
+    dest = tmp_path / "f.bin"
+    with pytest.raises(pipeline.DownloadError, match="short|incomplete|declared"):
+        pipeline.stream_to_file("https://d37ci6vzurychx.cloudfront.net/x", dest)
+    assert not dest.exists()
