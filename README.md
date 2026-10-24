@@ -9,21 +9,21 @@ Streamlit app (`app/`) reads the mart.
 
 ```mermaid
 flowchart LR
-    TLC[TLC CloudFront<br/>parquet + zone CSV] --> ING[Python ingestion<br/>ingestion/pipeline.py]
-    ING --> S3[(S3 raw<br/>raw/yellow/year=YYYY/month=MM)]
-    S3 --> GLUE[Glue catalog + Athena<br/>external tables, partition projection]
-    GLUE --> STG[dbt staging<br/>stg_trips, stg_zones]
-    SEED[seed vendors.csv] --> SNAP[dim_vendor<br/>SCD2 snapshot, Iceberg]
-    STG --> DZ[dim_zone]
-    STG --> FCT[fct_trips]
+    TLC["TLC CloudFront<br/>parquet + zone CSV"] --> ING["Python ingestion<br/>ingestion/pipeline.py"]
+    ING --> S3[("S3 raw<br/>raw/yellow/year=YYYY/month=MM")]
+    S3 --> GLUE["Glue catalog + Athena<br/>external tables, partition projection"]
+    GLUE --> STG["dbt staging<br/>stg_trips, stg_zones"]
+    SEED["seed vendors.csv"] --> SNAP["dim_vendor<br/>SCD2 snapshot, Iceberg"]
+    STG --> DZ["dim_zone"]
+    STG --> FCT["fct_trips"]
     DZ --> FCT
     SNAP --> FCT
-    FCT --> MART[mart_daily_zone_revenue]
-    MART --> ST[Streamlit app<br/>app/main.py]
-    AF{{Airflow<br/>@monthly DAG}} -.orchestrates.-> ING
+    FCT --> MARTS["marts<br/>daily_zone_revenue, hourly_borough,<br/>od_pairs, month_quality"]
+    MARTS --> ST["Streamlit app<br/>app/main.py"]
+    AF{{"Airflow<br/>monthly DAG"}} -.orchestrates.-> ING
     AF -.-> STG
-    DC[Docker Compose<br/>local Airflow + Postgres] -.runs.-> AF
-    GH[GitHub Actions CI<br/>no AWS secrets] -.checks.-> ING
+    DC["Docker Compose<br/>local Airflow + Postgres"] -.runs.-> AF
+    GH["GitHub Actions CI<br/>no AWS secrets"] -.checks.-> ING
 ```
 
 Airflow task order (`dags/nyc_taxi_elt.py`):

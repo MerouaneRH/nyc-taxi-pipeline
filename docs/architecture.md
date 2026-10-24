@@ -25,6 +25,10 @@ flowchart LR
     dim_zone --> fct_trips
     dim_vendor --> fct_trips
     fct_trips --> mart_daily_zone_revenue
+    fct_trips --> mart_hourly_borough
+    fct_trips --> mart_od_pairs
+    stg_trips --> mart_month_quality
+    yt --> mart_month_quality
 ```
 
 ## Materializations
