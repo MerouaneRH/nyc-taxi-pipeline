@@ -23,6 +23,7 @@ The snapshot sets `table_type='iceberg'`. dbt-athena implements snapshots with M
 ## Consequences
 
 - History accumulates only when `dbt snapshot` runs. The DAG runs it each month before `dbt build`.
-- The seed must be loaded (`dbt seed`) before the first snapshot. The DAG does not do this.
+- The seed must be loaded (`dbt seed`) before the first snapshot. The DAG task `dbt_prepare` does this.
+- No history change has been exercised yet; the mechanism is present but untested on a real name change.
 - Facts do not carry the vendor name that was valid at trip time.
 - Iceberg tables need Glue table-version reads and S3 writes under `warehouse/` (see `docs/sop.md`).

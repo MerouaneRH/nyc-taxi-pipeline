@@ -25,4 +25,5 @@ Status: Accepted
 - Measured on 2024-01 and 2024-02 only (5,900,444 rows), workgroup `primary`: full refresh built `fct_trips` in 54.8 s and scanned 97 MB. Incremental `run_month=2024-02` took 55 to 61 s and scanned 49 MB (temp table) plus 145 MB (insert from the temp table). At two months of data the incremental run is not faster and scans more, because dbt-athena first writes `fct_trips__dbt_tmp` and then inserts from it. Cost per run is flat in the number of months, while a full rebuild grows with it. Break-even is expected at roughly three or four months of data; this was not measured.
 - Partitioned hive output means many small files if months are tiny. Acceptable at this size.
 - A scan cap fails a query that exceeds 5 GiB. Full rebuilds of many years may need a higher cap.
-- Status of the workgroup: `athena:CreateWorkGroup` was denied for the `nyc-taxi` profile when this was written, so the workgroup did not exist. Until it is created (run the script with credentials that allow it), set `DBT_ATHENA_WORKGROUP=primary` and `ATHENA_WORKGROUP=primary`.
+- The workgroup `nyc-taxi-dbt` exists with the 5 GiB per-query scan cap enforced. `dbt/scripts/create_workgroup.py` creates it.
+- The measurements above were taken on `primary`, before the workgroup existed.

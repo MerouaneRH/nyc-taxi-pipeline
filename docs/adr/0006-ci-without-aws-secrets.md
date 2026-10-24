@@ -23,4 +23,5 @@ Pull-request CI that holds AWS keys adds credential exposure and cost risk on a 
 
 - Broken YAML, refs, config and Jinja are caught. SQL errors, type errors and failing data tests are not.
 - Model correctness is checked only by manual runs against Athena.
+- This workflow has not yet run on GitHub.
 - A later option is OIDC role assumption with a restricted workgroup and a scan limit. Not implemented.

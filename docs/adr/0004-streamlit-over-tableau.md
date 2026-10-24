@@ -18,5 +18,5 @@ Use Streamlit, reading `mart_daily_zone_revenue` through Athena with the same AW
 ## Consequences
 
 - The app is reviewed like other code and can run in Compose.
-- State in this branch: only `docker/streamlit.Dockerfile` (stub) and a commented compose service exist. `app/main.py` is not present here.
+- State: the app exists in `app/` (`main.py`, `data.py`). Run it with `uv run --group app streamlit run app/main.py`. The compose service is commented out; `docker/streamlit.Dockerfile` is there for it.
 - Each query the app sends to Athena costs scanned bytes. Caching is the app's responsibility.
