@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import data, loaders
 from app.queries import DAY_TYPES, Filters
 from app.views import airports, efficiency, overview, quality, routes, tips, trends
+from app.views.common import safe_render
 
 VIEWS = ["Overview", "Tips", "Airports", "Routes", "Efficiency", "Trends", "Data quality"]
 HOURLY_VIEWS = {"Tips", "Efficiency"}
@@ -65,18 +66,12 @@ if len(picked) != 2:
 
 filters = Filters(*picked, None if borough == "All" else borough, **extra)
 
-match view:
-    case "Tips":
-        tips.render(filters)
-    case "Airports":
-        airports.render(filters.start, filters.end)
-    case "Routes":
-        routes.render(filters)
-    case "Efficiency":
-        efficiency.render(filters)
-    case "Trends":
-        trends.render(filters, min_d)
-    case "Data quality":
-        quality.render(filters)
-    case _:
-        overview.render(filters, top_n)
+renderers = {
+    "Tips": (tips.render, filters),
+    "Airports": (airports.render, filters.start, filters.end),
+    "Routes": (routes.render, filters),
+    "Efficiency": (efficiency.render, filters),
+    "Trends": (trends.render, filters, min_d),
+    "Data quality": (quality.render, filters),
+}
+safe_render(*renderers.get(view, (overview.render, filters, top_n)))

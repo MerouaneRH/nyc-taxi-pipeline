@@ -1,5 +1,6 @@
 """Helpers shared by the views."""
 
+import logging
 from collections.abc import Callable
 
 import pandas as pd
@@ -7,6 +8,8 @@ import streamlit as st
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app import data
+
+log = logging.getLogger(__name__)
 
 
 def fetch(loader: Callable[..., pd.DataFrame], *args) -> pd.DataFrame | None:
@@ -24,3 +27,13 @@ def scanned_caption(df: pd.DataFrame, label: str) -> None:
 
 def scanned_total(*frames: pd.DataFrame) -> float:
     return sum(f.attrs.get("scanned_bytes", 0) for f in frames) / 1e6
+
+
+def safe_render(render: Callable[..., None], *args) -> None:
+    """Run a view; any unexpected error becomes a friendly message plus a server log entry."""
+    try:
+        render(*args)
+    except Exception:
+        log.exception("view %s failed", getattr(render, "__module__", "?"))
+        st.error("This view failed unexpectedly. Details are in the server log.",
+                 icon=":material/error:")

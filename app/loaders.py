@@ -9,20 +9,29 @@ from app import queries
 from app.data import TTL, build_daily_query, get_client, run_query
 from app.queries import Filters
 
-
-def _hourly_loader(builder):
-    @st.cache_data(ttl=TTL, max_entries=16, show_spinner="Querying hourly mart...")
-    def load(f: Filters) -> pd.DataFrame:
-        return run_query(get_client(), *builder(f))
-
-    load.__name__ = builder.__name__.replace("build_", "load_")
-    return load
+# One explicit function per query: st.cache_data keys on the function's qualified
+# name plus its arguments, so a shared factory-made inner function would collide.
+_SPIN = "Querying hourly mart..."
 
 
-load_tips_by_hour = _hourly_loader(queries.build_tips_by_hour)
-load_tips_by_borough = _hourly_loader(queries.build_tips_by_borough)
-load_efficiency_by_hour = _hourly_loader(queries.build_efficiency_by_hour)
-load_efficiency_by_borough = _hourly_loader(queries.build_efficiency_by_borough)
+@st.cache_data(ttl=TTL, max_entries=16, show_spinner=_SPIN)
+def load_tips_by_hour(f: Filters) -> pd.DataFrame:
+    return run_query(get_client(), *queries.build_tips_by_hour(f))
+
+
+@st.cache_data(ttl=TTL, max_entries=16, show_spinner=_SPIN)
+def load_tips_by_borough(f: Filters) -> pd.DataFrame:
+    return run_query(get_client(), *queries.build_tips_by_borough(f))
+
+
+@st.cache_data(ttl=TTL, max_entries=16, show_spinner=_SPIN)
+def load_efficiency_by_hour(f: Filters) -> pd.DataFrame:
+    return run_query(get_client(), *queries.build_efficiency_by_hour(f))
+
+
+@st.cache_data(ttl=TTL, max_entries=16, show_spinner=_SPIN)
+def load_efficiency_by_borough(f: Filters) -> pd.DataFrame:
+    return run_query(get_client(), *queries.build_efficiency_by_borough(f))
 
 
 @st.cache_data(ttl=TTL, max_entries=4, show_spinner="Loading payment types...")

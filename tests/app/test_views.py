@@ -139,3 +139,15 @@ def test_trends_marks_anomaly():
     assert not at.exception
     assert len(at.dataframe) == 1
     assert list(at.dataframe[0].value["pickup_date"]) == [DATES[35]]
+
+
+@pytest.mark.parametrize("view,loader", [("Efficiency", "load_efficiency_by_hour"),
+                                          ("Tips", "load_tips_by_borough")])
+def test_unexpected_view_error_is_friendly_and_logged(view, loader, caplog):
+    bad = pd.DataFrame({"unexpected": [1]})
+    at = _run(view, {loader: bad})
+    assert not at.exception
+    assert len(at.error) == 1
+    msg = at.error[0].value
+    assert "KeyError" not in msg and "Traceback" not in msg and ".py" not in msg
+    assert "unexpected" in msg.lower() or "log" in msg.lower()
