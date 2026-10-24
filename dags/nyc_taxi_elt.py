@@ -34,8 +34,8 @@ with DAG(
     dag_id="nyc_taxi_elt",
     description="NYC taxi: S3 raw ingestion then dbt-athena snapshot/build",
     schedule="@monthly",
-    start_date=datetime(2025, 1, 1),
-    catchup=True,
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
     max_active_runs=1,
     default_args=default_args,
     tags=["nyc-taxi", "elt"],
@@ -49,8 +49,7 @@ with DAG(
     # idempotent setup: raw external tables (CREATE ... IF NOT EXISTS) and the vendors seed
     dbt_prepare = _bash(
         "dbt_prepare",
-        f"{DBT} deps --project-dir {DBT_DIR} --profiles-dir {DBT_DIR} --target athena"
-        f" && {dbt_cmd.format(sub='run-operation create_raw_tables')}"
+        f"{dbt_cmd.format(sub='run-operation create_raw_tables')}"
         f" && {dbt_cmd.format(sub='seed')}",
     )
     dbt_snapshot = _bash("dbt_snapshot", f"{dbt_cmd.format(sub='snapshot')} {VARS}")

@@ -39,9 +39,9 @@ def test_dependency_order(dagbag):
 
 def test_schedule_and_catchup_bounded(dagbag):
     dag = dagbag.dags.get(DAG_ID)
-    assert dag.catchup is True
+    assert dag.catchup is False
     assert dag.schedule_interval == "@monthly"
-    assert (dag.start_date.year, dag.start_date.month) == (2025, 1)
+    assert (dag.start_date.year, dag.start_date.month) == (2024, 1)
     assert dag.max_active_runs == 1
 
 

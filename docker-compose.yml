@@ -12,7 +12,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     DBT_TARGET_PATH: /tmp/dbt/target
     DBT_LOG_PATH: /tmp/dbt/logs
-    AWS_PROFILE: ${AWS_PROFILE:-nyc-taxi}
+    # fixed: the mounted .aws-airflow holds only this profile
+    AWS_PROFILE: nyc-taxi
     AWS_REGION: ${AWS_REGION:-eu-west-3}
     AWS_DEFAULT_REGION: ${AWS_REGION:-eu-west-3}
     S3_BUCKET: ${S3_BUCKET:-merouane-nyc-taxi-raw-euw3-2026}
