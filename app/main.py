@@ -7,7 +7,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import data, loaders
+from app import data, freshness, loaders
 from app.queries import DAY_TYPES, Filters
 from app.views import airports, efficiency, overview, quality, routes, tips, trends
 from app.views.common import safe_render
@@ -17,6 +17,8 @@ HOURLY_VIEWS = {"Tips", "Efficiency"}
 
 st.set_page_config(page_title="NYC taxi", page_icon=":material/local_taxi:", layout="wide")
 st.title("NYC taxi dashboard")
+
+freshness.refresh_if_new()
 
 try:
     boroughs = data.load_boroughs()
@@ -53,6 +55,7 @@ def hourly_filters() -> dict:
 
 
 with st.sidebar:
+    freshness.watcher()
     st.header("Filters")
     borough = st.selectbox("Borough", ["All", *boroughs])
     default_start = max(min_d, max_d - timedelta(days=29))

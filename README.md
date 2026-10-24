@@ -81,6 +81,8 @@ Streamlit app (needs AWS access to the mart):
 uv run --group app streamlit run app/main.py
 ```
 
+The app checks the build time of `mart_month_quality` (a query that scans almost nothing) at most every 20 seconds and, on an open page, every 60 seconds. When a new dbt build lands, it clears its cached results and reruns by itself, so new months appear without a restart. The sidebar shows when the data was last built.
+
 Views: Overview (KPI tiles, daily revenue, top pickup zones, hour/weekday heatmap), Tips, Airports, Routes, Efficiency, Trends (week-over-week change, anomaly days) and Data quality. A view only queries when it is selected, and shows the MB it scanned. Sidebar filters: borough, dates, top zones, and for Tips and Efficiency also hour range, payment type, vendor and weekday/weekend.
 Queries filter on the `pickup_month` partition so Athena prunes partitions, and
 errors are shown as generic messages. The compose service is commented out.
