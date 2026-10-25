@@ -93,48 +93,6 @@ docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt \
 
 The 6-hourly runs that follow use the defaults again (no `--until`). This `--conf` form was not run here; check the rendered `--since`/`--until` in the `ingest_trips` log.
 
-### Notifications
-
-Messages go to ntfy.sh. Set or change the topic in the Airflow Variable `NTFY_TOPIC`; it takes effect on the next send, no restart:
-
-```bash
-docker compose exec airflow-scheduler airflow variables set NTFY_TOPIC <topic>
-```
-
-Use a long random topic (letters, digits, `_`, `-`): anyone who knows the name can read the messages. An empty or missing Variable means no messages and a log line. Subscribe to the topic in the ntfy app or at `https://ntfy.sh/<topic>`.
-
-- `notify_new` sends `NYC taxi ELT: loaded <months>, built in dbt` when a run loaded months and `dbt_build` succeeded. A run with nothing new sends nothing.
-- A failed task sends, at high priority, `NYC taxi ELT: task <task_id> failed in run <run_id>`.
-- A failed send is logged and never changes task state.
-
-Not verified here: real delivery, and the XCom hand-off in a real run.
-
-### Behaviour when nothing is new
-
-The DAG runs every 6 hours. If every month is current or unpublished, `ingest_trips` exits 99 and is skipped, so `dbt_prepare`, `dbt_snapshot` and `dbt_build` are skipped, `notify_new` runs and sends nothing, and the run costs only the HEAD checks (one S3 head plus one HTTP HEAD per month). A month TLC publishes is loaded by the next run, within about 6 hours.
-
-### Backfill cost
-
-Each missing month downloads about 60 MB and then triggers one `dbt build` of about 2 minutes, run one after the other. A 28-month backfill (2024-05 to 2026-08) is about 1.7 GB and about an hour of dbt builds, all inside one `dbt_build` task; if a build fails the task retries and redoes finished months (builds are idempotent). Request count per run grows with the months since the start month.
-
-### How a late month gets picked up
-
-TLC publishes a month about two months late. The run that fires when month M ends finds M unpublished and skips it. Every later run checks M again, so the first run after TLC publishes M uploads it, `NEW_MONTHS` lists it, and `dbt_build` builds it. There is no window to outgrow.
-
-### Force a rebuild of a month
-
-A run with nothing new skips `dbt_snapshot` and `dbt_build`. To rebuild a month anyway (for example after a model change), run dbt by hand for that month, using that month's year:
-
-```bash
-uv run dbt build --project-dir dbt --profiles-dir dbt --target athena \
-  --select stg_zones+ stg_trips+ \
-  --vars '{min_year: 2024, max_year: 2024, run_month: "2024-03"}'
-```
-
-To re-download the source file as well, delete the S3 object first (see Rerun a failed task).
-
-To load a specific range, trigger with `ingest_since` and `ingest_until` (see Load a year in a batch). Discovery does not depend on the run date: it uses `ingest_since` and the current UTC month. Do not use `airflow dags backfill` for this: with a 6-hourly schedule it creates one run per 6 hours and each would repeat the same discovery.
-
 ## Backfill
 
 Use the batch trigger above. Without Airflow, loop over months:
