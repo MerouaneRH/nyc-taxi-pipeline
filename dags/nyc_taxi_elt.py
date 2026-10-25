@@ -120,7 +120,10 @@ with DAG(
         "dbt_build",
         f'for M in $(echo "{NEW_MONTHS}" | sed "s/^NEW_MONTHS=//"); do '
         f"{dbt_cmd.format(sub='build')} --select stg_zones+ stg_trips+ "
-        '--vars "{min_year: ${M%%-*}, max_year: ${M%%-*}, run_month: \\"$M\\"}" '
+        # min_year = since year (full range for mart_month_quality), max_year = run year;
+        # run_month limits the incremental fct_trips rewrite to this one month
+        '--vars "{min_year: {{ since_year(params.ingest_since, data_interval_start) }}, '
+        'max_year: {{ data_interval_start.year }}, run_month: \\"$M\\"}" '
         "|| exit 1; done",
     )
 

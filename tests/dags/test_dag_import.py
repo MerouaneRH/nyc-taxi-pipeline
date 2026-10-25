@@ -154,7 +154,7 @@ def test_dbt_build_two_months_oldest_first_own_year(dagbag, tmp_path):
     cmd = _render(dagbag, "dbt_build", xcom="NEW_MONTHS=2023-12 2024-01")
     calls = _run_build(cmd, tmp_path)
     assert [_call_vars(c) for c in calls] == [
-        {"min_year": 2023, "max_year": 2023, "run_month": "2023-12"},
+        {"min_year": 2024, "max_year": 2024, "run_month": "2023-12"},
         {"min_year": 2024, "max_year": 2024, "run_month": "2024-01"},
     ]
 
@@ -184,14 +184,17 @@ def test_snapshot_vars_since_in_run_year(dagbag):
     assert _vars(cmd) == {"min_year": 2026, "max_year": 2026}
 
 
-def test_dbt_build_backfill_each_month_own_year(dagbag, tmp_path):
+def test_dbt_build_backfill_covers_full_range_every_month(dagbag, tmp_path):
+    # Regression: a per-month min_year/max_year made mart_month_quality (a table that reads
+    # raw over min_year..max_year) keep only the last month's year. Every call must cover
+    # since-year .. run-year, while run_month still limits fct_trips to one partition.
     xcom = "NEW_MONTHS=2024-05 2024-12 2025-01 2026-08"
     calls = _run_build(_render(dagbag, "dbt_build", (2026, 10), xcom=xcom), tmp_path)
     assert [_call_vars(c) for c in calls] == [
-        {"min_year": 2024, "max_year": 2024, "run_month": "2024-05"},
-        {"min_year": 2024, "max_year": 2024, "run_month": "2024-12"},
-        {"min_year": 2025, "max_year": 2025, "run_month": "2025-01"},
-        {"min_year": 2026, "max_year": 2026, "run_month": "2026-08"},
+        {"min_year": 2024, "max_year": 2026, "run_month": "2024-05"},
+        {"min_year": 2024, "max_year": 2026, "run_month": "2024-12"},
+        {"min_year": 2024, "max_year": 2026, "run_month": "2025-01"},
+        {"min_year": 2024, "max_year": 2026, "run_month": "2026-08"},
     ]
 
 
