@@ -1,207 +1,169 @@
-# NYC Taxi ELT
+# NYC taxi pipeline
 
-Batch ELT pipeline for NYC TLC yellow taxi trip data. Python loads monthly
-parquet files into S3, Athena reads them in place through Glue external tables,
-dbt-athena builds the models, Airflow runs the monthly sequence, and a
-Streamlit app (`app/`) reads the mart.
+This project copies the public yellow taxi trip files of the NYC Taxi and
+Limousine Commission (TLC) into S3. It builds analytics tables on them with dbt
+(a tool that builds SQL models) and Athena (AWS's SQL engine for files in S3),
+and shows the results in a Streamlit dashboard. Airflow runs the chain every 6
+hours and loads new months as TLC publishes them.
 
-## Architecture
+You can load every month TLC has published without downloading a file twice,
+query the raw parquet files in place, browse revenue, tips, airports, routes and
+trends in a dashboard, and see which rows the pipeline dropped and which trips
+look wrong but stayed in.
+
+## Overview
 
 ```mermaid
 flowchart LR
-    TLC["TLC CloudFront<br/>parquet + zone CSV"] --> ING["Python ingestion<br/>ingestion/pipeline.py"]
-    ING --> S3[("S3 raw<br/>raw/yellow/year=YYYY/month=MM")]
-    S3 --> GLUE["Glue catalog + Athena<br/>external tables, partition projection"]
-    GLUE --> STG["dbt staging<br/>stg_trips, stg_zones"]
-    SEED["seed vendors.csv"] --> SNAP["dim_vendor<br/>SCD2 snapshot, Iceberg"]
-    STG --> DZ["dim_zone"]
-    STG --> FCT["fct_trips"]
-    DZ --> FCT
-    SNAP --> FCT
-    FCT --> MARTS["marts<br/>daily_zone_revenue, hourly_borough,<br/>od_pairs, month_quality"]
-    MARTS --> ST["Streamlit app<br/>app/main.py"]
-    AF{{"Airflow<br/>6-hourly DAG"}} -.orchestrates.-> ING
-    AF -.-> STG
-    DC["Docker Compose<br/>local Airflow + Postgres"] -.runs.-> AF
-    GH["GitHub Actions CI<br/>no AWS secrets"] -.checks.-> ING
+    subgraph Source
+        TLC["TLC files<br/>parquet + zone CSV"]
+    end
+    subgraph Ingest
+        ING["ingestion<br/>pipeline.py"]
+    end
+    subgraph Storage["Storage: S3 eu-west-3"]
+        RAW[("raw/<br/>yellow + zones")]
+        WH[("warehouse/<br/>dbt tables")]
+    end
+    subgraph Transform
+        ATH["Athena + Glue<br/>external tables"]
+        DBT["dbt<br/>snapshot + build"]
+    end
+    subgraph Serve
+        APP("Streamlit<br/>dashboard")
+    end
+    subgraph Orchestration
+        AF["Airflow DAG<br/>every 6 hours"]
+    end
+    TLC -->|"size check, download"| ING
+    ING -->|"upload"| RAW
+    RAW -->|"read in place"| ATH
+    DBT -.->|"sends SQL"| ATH
+    ATH -->|"writes models"| WH
+    WH -->|"Athena queries"| APP
+    AF -.->|"runs"| ING
+    AF -.->|"runs"| DBT
 ```
 
-Airflow task order (`dags/nyc_taxi_elt.py`):
-`ingest_zones >> ingest_trips >> dbt_prepare >> dbt_snapshot >> dbt_build`.
+Solid arrows carry data or queries. Dashed arrows show Airflow starting a step.
+The Python loader copies each monthly file to S3 and skips a file when S3 holds
+one of the same size. Athena
+reads those files through Glue external tables (table definitions that point at
+files in S3), and dbt builds its models on top. The dashboard queries the
+finished tables through Athena.
 
-- `dbt_prepare` runs `dbt run-operation create_raw_tables` and `dbt seed` (both idempotent).
-- Schedule `0 */6 * * *` (every 6 hours, ADR 0010), `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`. A run with nothing new skips `ingest_trips` (exit 99) and every dbt task, so it costs only the HEAD checks.
-- Full discovery (ADR 0009): every run checks every month from `ingest_since` (DAG param, `YYYY-MM`, default `2024-01`) through the current month (`ingestion.pipeline --since 2024-01`) and ingests any month published on TLC but missing (or size-mismatched) in S3. Months not yet published return 403 and are skipped. Preview with `--dry-run` (HEAD checks only). To load in batches, set the DAG param `ingest_until` (`YYYY-MM`, inclusive, default empty = current month), which passes `--until` to the loader. A first run after deploy backfills every missing month (about 60 MB and one 2-minute dbt build each).
-- `ingest_trips` passes `--skip-unpublished`. Months that return 403/404 are logged as `unpublished <url>` on stderr and skipped. The last stdout line is `NEW_MONTHS=<months uploaded in this run, oldest first>` (empty if none); the BashOperator pushes it to XCom.
-- Exit codes of `ingestion.pipeline --months ... --skip-unpublished`: 0 if at least one month was uploaded, 99 if nothing was uploaded (all current, or unpublished). `skip_on_exit_code=99` turns 99 into a skipped task, so `dbt_prepare`, `dbt_snapshot` and `dbt_build` are skipped when there is nothing new.
-- `dbt_build` reads `NEW_MONTHS` from XCom and runs one incremental build per new month, oldest first: `--select stg_zones+ stg_trips+` with `min_year`/`max_year` set to that month's year and `run_month` set to the month. ``dbt_snapshot` uses `min_year` = year of `ingest_since`, `max_year` = the run's year.
+## Quick start
 
-## Stack
+You need Python 3.12, `uv`, Docker, and an AWS profile named `nyc-taxi` with
+access to the bucket, Glue and Athena. The IAM actions are listed in the
+[runbook](docs/sop.md#iam-permissions).
 
-| Layer | Tool |
-|---|---|
-| Source | TLC public files on CloudFront (`d37ci6vzurychx.cloudfront.net`) |
-| Ingestion | Python 3.12, requests, boto3, pyarrow, tenacity |
-| Storage | S3, region `eu-west-3` |
-| Query | Athena over Glue external tables (partition projection on year, month) |
-| Transform | dbt-core 1.12.6, dbt-athena 1.11.1 |
-| Orchestration | Airflow 2.10.5, LocalExecutor, Postgres 16.4 |
-| CI | GitHub Actions (ruff, pytest, DAG import tests, dbt parse) |
-| BI | Streamlit (`app/`; compose service commented out) |
-
-## Quickstart
-
-Prerequisites: Python 3.12, `uv`, Docker, an AWS profile named `nyc-taxi`
-with access to the bucket, Glue and Athena. Required IAM actions are listed in
-`docs/sop.md`.
+Install, lint and test. This step needs no AWS access. The DAG tests are left
+out because Airflow's pinned dependencies conflict with the project's, so CI runs
+them in a separate job.
 
 ```bash
-# 1. Python deps and tests (no AWS needed)
 uv sync
 uv run --group app pytest tests --ignore=tests/dags
 uv run ruff check .
+```
 
-# 2. Load one month into S3
+Create the Athena workgroup `nyc-taxi-dbt`, which caps each query at 5 GiB
+scanned. Then load the zone lookup and one month into S3. Run these from the
+repo root.
+
+```bash
 export AWS_PROFILE=nyc-taxi
+uv run python dbt/scripts/create_workgroup.py
 uv run python -m ingestion.pipeline --zones
 uv run python -m ingestion.pipeline --service yellow --months 2024-01
+```
 
-# 3. Create Glue tables, then build models (from dbt/)
+Create the Glue tables and build the models. Run this from the repo root.
+
+```bash
 cd dbt
 uv run --group dbt dbt run-operation create_raw_tables --profiles-dir . --target athena
 uv run --group dbt dbt seed     --profiles-dir . --target athena
 uv run --group dbt dbt snapshot --profiles-dir . --target athena
 uv run --group dbt dbt build    --profiles-dir . --target athena
+cd ..                       # back to the repo root
 ```
 
-`tests/dags` needs Apache Airflow, which conflicts with the project's
-`requests` pin, so CI runs it in a separate job (see CI below).
-
-Streamlit app (needs AWS access to the mart):
+Start the dashboard from the repo root. It needs AWS access to the built tables.
 
 ```bash
 uv run --group app streamlit run app/main.py
 ```
 
-The app checks the build time of `mart_month_quality` (a query that scans almost nothing) at most every 20 seconds and, on an open page, every 60 seconds. When a new dbt build lands, it clears its cached results and reruns by itself, so new months appear without a restart. The sidebar shows when the data was last built.
-
-Views: Overview (KPI tiles, daily revenue, top pickup zones, hour/weekday heatmap), Tips, Airports, Routes, Efficiency, Trends (week-over-week change, anomaly days) and Data quality. A view only queries when it is selected, and shows the MB it scanned. Sidebar filters: borough, dates, top zones, and for Tips and Efficiency also hour range, payment type, vendor and weekday/weekend.
-Queries filter on the `pickup_month` partition so Athena prunes partitions, and
-errors are shown as generic messages. The compose service is commented out.
-
-Local Airflow:
+Run Airflow locally from the repo root. Compose refuses to start until `.env` sets
+`POSTGRES_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW__CORE__FERNET_KEY` and
+`AIRFLOW__WEBSERVER__SECRET_KEY`.
 
 ```bash
-cp .env.example .env
-# set POSTGRES_PASSWORD, AIRFLOW_ADMIN_PASSWORD, AIRFLOW__CORE__FERNET_KEY,
-# AIRFLOW__WEBSERVER__SECRET_KEY
+cp .env.example .env        # then fill in the four values
+mkdir -p .aws-airflow       # copy only the nyc-taxi profile from ~/.aws into it
 docker compose up --build   # UI at http://localhost:8080
 ```
 
-The DAG `nyc_taxi_elt` is created paused. The Airflow UI binds to
-`127.0.0.1:8080` only. Compose mounts `./ingestion`, `./dbt` (both read-only)
-and `./pyproject.toml` into `/opt/project`, and `./.aws-airflow` (gitignored,
-only the `nyc-taxi` profile copied from `~/.aws`) at `/home/airflow/.aws`.
-`AWS_PROFILE` is fixed to `nyc-taxi` in the containers. Compose fails at
-startup if `POSTGRES_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD`, the Fernet key or the
-webserver secret key is unset.
+The Compose Streamlit service is commented out. Run the dashboard with `uv`.
 
-## Repo layout
+The DAG `nyc_taxi_elt` starts paused. Unpause it in the UI, which listens on
+`127.0.0.1` only. The [runbook](docs/sop.md) covers loading ranges, rebuilding a
+month and fixing failed runs.
+
+## What the dashboard shows
+
+It has seven views. A view queries only when you select it. Each view prints
+the megabytes Athena scanned. Overview prints it for its heatmap only.
+
+- Overview: trips, revenue and average tip, daily revenue, top pickup zones, and an hour-by-weekday heatmap.
+- Tips: tip percentage by hour and borough. TLC records tips for card payments only, so this covers cards.
+- Airports: trips, revenue and average fare for JFK, LaGuardia and Newark.
+- Routes: the busiest pickup-to-dropoff zone pairs and a borough-to-borough matrix.
+- Efficiency: revenue per mile and per minute, by hour and borough.
+- Trends: week-over-week change, and days whose revenue is far from normal for that weekday.
+- Data quality: rows removed, suspect trips by reason, and example trips you can download as CSV.
+
+The sidebar filters by borough and date. Tips and Efficiency also filter by hour,
+payment type, vendor and weekday or weekend. Airports ignores the borough. Routes
+and Data quality widen the dates to whole months, and Data quality ignores the
+borough. Trends uses up to 112 days ending at the end date. The app rejects a
+range over 400 days. Every 60 seconds it checks for a new dbt build and, if one
+landed, clears its cache and reloads.
+
+## Repo map
 
 ```
-ingestion/
-  pipeline.py   TLC -> S3 loader used by the DAG (idempotent, retries, schema check, `NEW_MONTHS=` line, exit 99 when nothing was uploaded)
-  download.py   local download of TLC files to data/raw (also provides trip_url)
-  soda.py       local pull from the NYC Open Data SODA API to data/raw/soda
+dags/nyc_taxi_elt.py    the Airflow DAG
+ingestion/              TLC to S3 loader (pipeline.py; download.py and soda.py are local helpers)
 dbt/
-  models/staging/   stg_trips, stg_zones
-  models/marts/     dim_zone, fct_trips, mart_daily_zone_revenue, mart_hourly_borough, mart_od_pairs, mart_month_quality, dq_suspect_trips, mart_dq_summary
-  snapshots/        dim_vendor (SCD2, Iceberg)
-  seeds/            vendors.csv
-  macros/           create_raw_tables (Glue database + external tables)
-  tests/            assert_dropoff_after_pickup.sql, assert_plausible_speed.sql (warn)
-  scripts/          create_workgroup.py (Athena workgroup nyc-taxi-dbt)
-  profiles.yml      Athena target, no secrets
-dags/nyc_taxi_elt.py
-app/                Streamlit app (main.py, data.py)
-docker/             airflow.Dockerfile, streamlit.Dockerfile
-docker-compose.yml  postgres, airflow-init, webserver, scheduler
-tests/              ingestion, app and DAG import tests
-notebooks/          exploration notebook
-.github/workflows/ci.yml
-docs/               architecture.md, sop.md, adr/
+  models/staging/       stg_trips, stg_zones
+  models/marts/         dim_zone, fct_trips, three marts, mart_month_quality,
+                        dq_suspect_trips, mart_dq_summary (see docs/data-model.md)
+  snapshots/, seeds/    dim_vendor (history table), vendors.csv
+  macros/               create_raw_tables (Glue database and external tables)
+  tests/                six singular tests
+  scripts/              create_workgroup.py (Athena workgroup nyc-taxi-dbt)
+app/                    Streamlit dashboard (main.py, views/, queries, loaders)
+docker/, docker-compose.yml   Airflow and Streamlit images, local Airflow stack
+tests/, notebooks/, .github/workflows/   Python tests, exploration notebook, CI
+docs/                   architecture, data model, runbook, decision records
 ```
 
-## Data model
-
-| Model | Type | Notes |
-|---|---|---|
-| `stg_trips` | view | Casts and renames; drops invalid rows; `trip_id` is an md5 of vendor, pickup, dropoff, zones, total; dedups on `trip_id` |
-| `stg_zones` | view | Zone lookup CSV with typed `zone_id` |
-| `dim_zone` | table (hive, parquet) | Zones from `stg_zones` |
-| `dim_vendor` | snapshot (Iceberg) | SCD2, `check` strategy on `vendor_name`, source is the `vendors` seed |
-| `fct_trips` | incremental (hive, parquet, `insert_overwrite`, partitioned by `pickup_month`) | One row per trip; joins zones and the current vendor row (`dbt_valid_to is null`); adds duration, speed, tip percent, payment name |
-| `mart_daily_zone_revenue` | table (hive, parquet) | Trips and revenue per pickup zone per day |
-| `mart_hourly_borough` | incremental (hive, parquet, `insert_overwrite`, partitioned by `pickup_month`) | Per day, hour, borough, payment type and vendor: trips, revenue, distance and duration sums, card-only fare and tip sums (cash tips are not recorded) |
-| `mart_od_pairs` | incremental (same pattern) | Per month, pickup zone and dropoff zone: trips, revenue, distance and duration sums |
-| `mart_month_quality` | table | Per month: raw rows, staged rows, dropped rows and percent, implausible-speed rows, dropped rows by rule (negative totals, dropoff before pickup, 24h or more, pickup outside the month), the negative-total sum, and trips with a missing passenger count |
-| `dq_suspect_trips` | incremental (same pattern) | One row per suspect trip (flagged, never deleted), with a primary `reason_code`, all matching `reason_codes`, and the likely broken field (`suspect_field`) |
-| `mart_dq_summary` | table | Per month and reason: trips, share of the month, money on the flagged rows |
-
-Cost control: `min_year` and `max_year` vars (both 2024 in
-`dbt_project.yml`) restrict which partitions staging scans. Override with
-`--vars '{min_year: 2023, max_year: 2024}'`; the DAG sets both to the run year.
-dbt runs in Athena workgroup `nyc-taxi-dbt`, which has an enforced 5 GiB
-per-query scan cap (ADR 0007; `dbt/scripts/create_workgroup.py` creates it).
-
-## Data quality
-
-dbt tests (`data_tests` in the yml files):
-
-- `stg_zones.zone_id`: not_null, unique.
-- `stg_trips.trip_id`: not_null, unique. `vendor_id`: not_null, accepted values 1, 2, 6, 7. `payment_type`: accepted values 0 to 6. `pickup_at`: not_null.
-- `dim_zone.zone_id`: not_null, unique.
-- `fct_trips.trip_id`: not_null, unique. `vendor_id` and `pickup_zone_id`: not_null and relationships to `dim_vendor` and `dim_zone`. `dropoff_zone_id`: relationships to `dim_zone`. `payment_type`: accepted values. `trip_duration_min`: not_null.
-- `mart_daily_zone_revenue.pickup_date`: not_null.
-- `dim_vendor.vendor_id` and `vendor_name`: not_null.
-- Singular test `assert_dropoff_after_pickup`: no `fct_trips` row with dropoff before pickup.
-- Singular test `assert_plausible_speed` (severity `warn`): `avg_speed_mph` of 200 or more is reported, not blocking.
-
-Suspect trips (`dq_suspect_trips`) are flagged by rules with thresholds set in `dbt_project.yml` (`dq_*` vars): `DISTANCE_ABSURD` (100 miles or more), `SPEED_IMPLAUSIBLE` (100 mph or more), `TIMESTAMP_SUSPECT` (under 60 seconds and at least 1 mile), `ZERO_DISTANCE_PAID` (0 miles and a fare of $10 or more), `LONG_DURATION` (12 hours or more), `ZERO_TOTAL`. Each trip is counted once, under its first matching reason. Flagged trips stay in revenue; only speed and efficiency metrics should leave them out. The thresholds are judgment calls. The dashboard's Data quality view shows the counts, an explanation per reason, and up to 200 example trips with a CSV download.
-
-Negative totals are refunds and adjustments (mostly dispute, cash and no-charge payments), not bad records. Staging drops them, so revenue ignores them. For January and February 2024 they sum to about -$1.8M.
-
-Row filters in `stg_trips` (rows removed, not flagged): null pickup, dropoff
-before pickup, duration of 24 hours or more, negative distance or total, and
-pickup outside the file's own year and month.
-
-Ingestion checks: a downloaded trip file must contain 10 required columns
-(read from the parquet footer) before upload.
-
-Python tests: `tests/ingestion`, `tests/app` and `tests/dags`. Counts change; see CI output or count with `grep -c '^def test_' -r tests`.
-
-## CI
-
-`.github/workflows/ci.yml` runs on pull requests with no AWS credentials:
-
-- `lint-test`: `ruff check .` and pytest excluding `tests/dags`.
-- `dag-tests`: installs Airflow 2.10.5 with its constraint file and runs `tests/dags`.
-- `dbt-parse`: `dbt deps` and `dbt parse` only. Pull-request CI never reaches Athena.
-
-`.github/workflows/dbt-build.yml` runs the real `dbt build` on Athena. It is triggered by pushes to `main` that touch `dbt/**` and by manual dispatch, never by pull requests. It assumes an AWS role through GitHub OIDC (no stored keys); the role ARN is the repository variable `AWS_DBT_ROLE_ARN`. It uses the `ci` target in `dbt/profiles.yml`, which has no AWS profile name, and runs `create_raw_tables`, `seed`, `snapshot` and `build` for 2024.
+More docs: [docs/README.md](docs/README.md) lists every document in reading order:
+[architecture](docs/architecture.md), [data model](docs/data-model.md),
+[runbook](docs/sop.md) and the [decision records](docs/adr/).
 
 ## Known limitations
 
-- Idempotency is size-only: ingestion skips a file when the S3 object size equals the source `Content-Length`. Changed content with the same size is not detected (ADR 0005).
-- `trip_id` is a hash of six fields. Two real trips with identical values collapse into one row.
-- Only 2024 is verified. Parquet column types of other years are untested and may fail on read (see the `create_raw_tables` macro).
-- Vendor 7 is accepted in tests but unverified.
-- Incremental `fct_trips` is not yet faster than a full refresh at two months of data: 55 to 61 s and 49 + 145 MB scanned versus 54.8 s and 97 MB for full refresh (ADR 0007). Break-even is expected later and was not measured.
-- `avg_speed_mph` has 1502 implausible rows (200 mph or more). They are flagged by the warn-severity test `assert_plausible_speed`, not removed.
-- Pull-request CI is parse-only for dbt. The real `dbt build` runs only after a merge to `main` (or by manual dispatch), so a broken model reaches `main` before it is caught.
-- SCD2 (`dim_vendor` snapshot) was checked by hand once: renaming vendor 2 in the seed and re-running `dbt snapshot` closed the old row and opened a new one. There is no automated test for it.
-- The models use Athena/Trino functions (`date_diff`, `to_hex`, `md5(to_utf8(...))`, `day_of_week`) and hive/Iceberg `table_type` configs, so moving to another warehouse needs code changes, not only a new profile.
-- The Streamlit compose service is commented out; run the app with `uv run`.
-- Single environment, no staging/prod split, no alerting beyond Airflow retries (3 retries, exponential backoff, 5 minute delay).
-- `download.py` and `soda.py` write to local `data/raw` and are not part of the DAG.
-- Default bucket name and profile are hard-coded in `ingestion/pipeline.py`, `app/data.py`, `dbt/profiles.yml` and the `create_raw_tables` macro; override with `S3_BUCKET`, `AWS_PROFILE`, `DBT_S3_STAGING_DIR`, `DBT_S3_DATA_DIR`.
+- Ingestion skips a file when the S3 size equals the TLC size. A republished file with the same size goes unnoticed ([ADR 0005](docs/adr/0005-idempotent-size-based-skip.md)).
+- `trip_id` hashes six fields, so two real trips with identical values collapse into one row. Only 2024 is verified. Other years may fail on read.
+- Vendor Helix (vendor 7, in the data from 2024-12) often records the same pickup and dropoff time, so its durations are wrong. Duration-based figures such as revenue per minute and average speed are off for those trips. Revenue and distance look usable. This was measured on 2024-01 to 2026-08, not taken from TLC documentation. See [the data model](docs/data-model.md#known-data-issue-helix-timestamps).
+- Suspect trips stay in every dashboard number, including Efficiency. Nothing excludes them yet.
+- About 1,500 of 5.9 million trips in 2024-01 and 2024-02 show 200 mph or more. A warn-level test reports them.
+- Pull-request CI only parses dbt. The real `dbt build` runs after the merge to `main` ([ADR 0006](docs/adr/0006-ci-without-aws-secrets.md)).
+- The vendor history (a slowly changing dimension of type 2, SCD2) was checked by hand once. No automated test covers it.
+- In an early test with two months loaded (not measured again since), incremental `fct_trips`, which rewrites only the month you name, was no faster than a full refresh ([ADR 0007](docs/adr/0007-incremental-fct-trips-and-workgroup-cap.md)).
+- The SQL uses Athena and Trino functions, so another warehouse needs code changes. There is one environment and no alerting beyond Airflow retries (3, with exponential backoff from 5 minutes).
+- The bucket name and AWS profile are hard-coded defaults in `ingestion/pipeline.py`, `app/data.py`, `dbt/profiles.yml` and the `create_raw_tables` macro. Override them with environment variables: `S3_BUCKET` and `AWS_PROFILE` (loader and macro), `DBT_S3_STAGING_DIR`, `DBT_S3_DATA_DIR`, `DBT_SCHEMA` and `AWS_REGION` (dbt), and `ATHENA_OUTPUT`, `ATHENA_DATABASE`, `ATHENA_WORKGROUP` and `AWS_PROFILE` (dashboard).
