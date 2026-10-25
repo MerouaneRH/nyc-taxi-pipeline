@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context and problem
 
-Airflow retries and re-runs must not re-download or duplicate files. TLC monthly files are tens of megabytes each.
+Airflow retries and reruns must not download a file twice or leave duplicates. A monthly TLC file is tens of megabytes.
 
 ## Options
 
@@ -15,13 +15,15 @@ Airflow retries and re-runs must not re-download or duplicate files. TLC monthly
 
 ## Decision
 
-`ingestion/pipeline.py` writes to a deterministic key per month (`raw/yellow/year=YYYY/month=MM/yellow_tripdata_YYYY-MM.parquet`). It reads the S3 size with `head_object` and the source size with an HTTP HEAD. It skips if they match, or if the source size cannot be fetched. Otherwise it streams to a temp file, checks required columns in the parquet footer, and uploads. HTTP and S3 calls retry up to 5 times with exponential backoff.
+`ingestion/pipeline.py` writes each month to a fixed key (`raw/yellow/year=YYYY/month=MM/yellow_tripdata_YYYY-MM.parquet`). It reads the S3 size with `head_object` and the source size with an HTTP HEAD. It skips the file if the sizes match, or if the source size cannot be read. Otherwise it streams the file to a temporary directory, checks the required columns in the parquet footer, and uploads. HTTP and S3 calls retry up to 5 times with exponential backoff.
+
+The download also refuses redirects, stops above `MAX_DOWNLOAD_BYTES` (2 GiB by default), and fails when the byte count differs from `Content-Length`.
 
 ## Consequences
 
-- Re-running a month is cheap and leaves the same S3 state.
-- A partial file never appears under the final key: the upload starts after the full download.
-- Weakness: if TLC republishes a file with different content and the same byte size, the change is not detected. A checksum or `Last-Modified` comparison would fix this.
-- Weakness: if the HEAD request fails, an existing object is kept without verification.
-- Weakness: the schema check covers 10 column names only, not types.
-- `ingest_zones` uses the same rule for the zone CSV, without the schema check.
+- Rerunning a month is cheap and leaves the same S3 state.
+- A partial file never appears under the final key, because the upload starts after the full download.
+- Weakness: if TLC republishes a file with new content and the same byte size, nobody notices. A checksum or `Last-Modified` comparison would fix this.
+- Weakness: if the HEAD request fails, an existing object is kept without a check.
+- Weakness: the schema check covers 10 column names, not their types.
+- `ingest_zones` uses the same rule for the zone CSV. Its check compares the header row with `LocationID,Borough,Zone,service_zone`.
