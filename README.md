@@ -31,10 +31,10 @@ Airflow task order (`dags/nyc_taxi_elt.py`):
 
 - `dbt_prepare` runs `dbt run-operation create_raw_tables` and `dbt seed` (both idempotent).
 - Schedule `@monthly`, `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`.
-- Catch-up window (ADR 0008): TLC publishes a month about two months late. Each run tries the last N months ending at `data_interval_start`, newest first (`--months 2024-02 2024-01 2023-12 2023-11`). N is the DAG param `ingest_window_months` (default 4, minimum 1, maximum 12; override at trigger time). Months already in S3 with the same size are skipped, so a late-published month is picked up by a later run.
+- Full discovery (ADR 0009): every run checks every month from `ingest_since` (DAG param, `YYYY-MM`, default `2024-01`) through the current month (`ingestion.pipeline --since 2024-01`) and ingests any month published on TLC but missing (or size-mismatched) in S3. Months not yet published return 403 and are skipped. Preview with `--dry-run` (HEAD checks only). A first run after deploy backfills every missing month (about 60 MB and one 2-minute dbt build each).
 - `ingest_trips` passes `--skip-unpublished`. Months that return 403/404 are logged as `unpublished <url>` on stderr and skipped. The last stdout line is `NEW_MONTHS=<months uploaded in this run, oldest first>` (empty if none); the BashOperator pushes it to XCom.
 - Exit codes of `ingestion.pipeline --months ... --skip-unpublished`: 0 if at least one month was uploaded, 99 if nothing was uploaded (all current, or unpublished). `skip_on_exit_code=99` turns 99 into a skipped task, so `dbt_prepare`, `dbt_snapshot` and `dbt_build` are skipped when there is nothing new.
-- `dbt_build` reads `NEW_MONTHS` from XCom and runs one incremental build per new month, oldest first: `--select stg_zones+ stg_trips+` with `min_year`/`max_year` set to that month's year and `run_month` set to the month. `min_year`/`max_year` of `dbt_snapshot` still come from the run's year.
+- `dbt_build` reads `NEW_MONTHS` from XCom and runs one incremental build per new month, oldest first: `--select stg_zones+ stg_trips+` with `min_year`/`max_year` set to that month's year and `run_month` set to the month. ``dbt_snapshot` uses `min_year` = year of `ingest_since`, `max_year` = the run's year.
 
 ## Stack
 

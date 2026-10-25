@@ -55,24 +55,40 @@ docker compose up --build -d
 
 Open `http://localhost:8080` (bound to `127.0.0.1` only), log in with `AIRFLOW_ADMIN_USER` (default `admin`), unpause `nyc_taxi_elt`. Task order: `ingest_zones`, `ingest_trips`, `dbt_prepare`, `dbt_snapshot`, `dbt_build`. Settings: `@monthly`, `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`, 3 retries with exponential backoff from 5 minutes.
 
-The run for logical date D tries a window of months ending at `data_interval_start` (default 4, newest first). `dbt_snapshot` takes `min_year` and `max_year` from the run's year. `dbt_build` builds each month that `ingest_trips` uploaded in this run (oldest first), with `--select stg_zones+ stg_trips+`, that month's own year as `min_year`/`max_year`, and `run_month` set to the month.
+Each run discovers months (ADR 0009): `ingest_trips` runs `ingestion.pipeline --since <ingest_since>` and checks every month from `ingest_since` (default `2024-01`) through the current month. `dbt_snapshot` takes `min_year` from the year of `ingest_since` and `max_year` from the run's year, so a backfill is covered. `dbt_build` builds each month that `ingest_trips` uploaded in this run (oldest first), with `--select stg_zones+ stg_trips+`, that month's own year as `min_year`/`max_year`, and `run_month` set to the month.
 
-Late and unpublished months: `ingest_trips` runs with `--skip-unpublished` and `skip_on_exit_code=99`. Months TLC has not published (CloudFront returns 403) are logged and skipped. If nothing was uploaded in the run (every month current or unpublished), the task exits 99 and is skipped, and so are `dbt_prepare`, `dbt_snapshot` and `dbt_build`. The task is not failed. See ADR 0008.
+Late and unpublished months: `ingest_trips` runs with `--skip-unpublished` and `skip_on_exit_code=99`. Months TLC has not published (CloudFront returns 403) are logged and skipped. If nothing was uploaded in the run (every month current or unpublished), the task exits 99 and is skipped, and so are `dbt_prepare`, `dbt_snapshot` and `dbt_build`. The task is not failed. See ADR 0009.
 
-### Change the catch-up window
+### What discovery does
 
-The window is the DAG param `ingest_window_months` (integer, 1 to 12, default 4). For one run, trigger with a config:
+For each month from the start month through the current UTC month, the loader compares the S3 object size with the TLC file size (two cheap HEAD requests). A month missing in S3 or with a different size is downloaded, validated and uploaded. A month TLC has not published (HTTP 403) is logged as `unpublished` and skipped; a later run picks it up. The last stdout line is `NEW_MONTHS=<uploaded months, oldest first>`; exit 99 means nothing was uploaded and dbt is skipped.
+
+### Preview with a dry run
+
+```bash
+AWS_PROFILE=nyc-taxi uv run python -m ingestion.pipeline --since 2024-01 --service yellow --skip-unpublished --dry-run
+```
+
+Prints one line per month (`would-upload`, `current` or `unpublished`), then `NEW_MONTHS=` and exits with the code a real run would. Nothing is downloaded or uploaded. Run this before the first run after deploy to see how many months a backfill will load.
+
+### Change the start month
+
+The start month is the DAG param `ingest_since` (`YYYY-MM`, must not be after the run month; a bad value fails the `ingest_trips` task). For one run:
 
 ```bash
 docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt \
-  --conf '{"ingest_window_months": 6}'
+  --conf '{"ingest_since": "2025-01"}'
 ```
 
-To change the default, edit the `Param(4, ...)` in `dags/nyc_taxi_elt.py` and restart the scheduler. The `--conf` form was not run here; check the rendered `--months` list in the `ingest_trips` log. A larger window costs one HEAD request per extra month and one S3 head; no download happens for months already current.
+To change the default, edit the `Param("2024-01", ...)` in `dags/nyc_taxi_elt.py` and restart the scheduler. The `--conf` form was not run here; check the rendered `--since` value in the `ingest_trips` log. Months before the start month are never checked.
+
+### Backfill cost
+
+Each missing month downloads about 60 MB and then triggers one `dbt build` of about 2 minutes, run one after the other. A 28-month backfill (2024-05 to 2026-08) is about 1.7 GB and about an hour of dbt builds, all inside one `dbt_build` task; if a build fails the task retries and redoes finished months (builds are idempotent). Request count per run grows with the months since the start month.
 
 ### How a late month gets picked up
 
-TLC publishes a month about two months late. The run that fires when month M ends finds M unpublished and skips it. Each later run still includes M in its window, so the first run after TLC publishes M uploads it, `NEW_MONTHS` lists it, and `dbt_build` builds it. This works only while M is inside the window. If TLC is later than N-1 months behind, raise the window or load the month by hand.
+TLC publishes a month about two months late. The run that fires when month M ends finds M unpublished and skips it. Every later run checks M again, so the first run after TLC publishes M uploads it, `NEW_MONTHS` lists it, and `dbt_build` builds it. There is no window to outgrow.
 
 ### Force a rebuild of a month
 

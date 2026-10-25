@@ -10,6 +10,7 @@ import yaml
 
 pytest.importorskip("airflow")
 from airflow import macros
+from airflow.exceptions import ParamValidationError
 from airflow.models import DagBag
 
 DAGS = Path(__file__).resolve().parents[2] / "dags"
@@ -63,50 +64,55 @@ def test_ingest_trips_skips_when_nothing_new(dagbag):
     assert t.skip_on_exit_code == [99]
 
 
-def test_window_param_definition(dagbag):
-    param = dagbag.dags[DAG_ID].params.get_param("ingest_window_months")
-    assert param.value == 4
-    assert param.schema["minimum"] == 1 and param.schema["maximum"] == 12
+def test_since_param_definition(dagbag):
+    dag = dagbag.dags[DAG_ID]
+    assert "ingest_window_months" not in dag.params
+    param = dag.params.get_param("ingest_since")
+    assert param.value == "2024-01"
+    assert param.schema["type"] == "string"
 
 
-def _render(dagbag, task_id: str, start=(2024, 3), window=None, xcom=None) -> str:
+def _render(dagbag, task_id: str, start=(2024, 3), since="2024-01", xcom=None) -> str:
     dag = dagbag.dags[DAG_ID]
     task = dag.get_task(task_id)
-    params = {"ingest_window_months": dag.params["ingest_window_months"] if window is None else window}
     ctx = {
         "data_interval_start": pendulum.datetime(*start, 1, tz="UTC"),
-        "params": params,
+        "params": {"ingest_since": since},
         "macros": macros,  # same object Airflow puts in the task context
         "ti": SimpleNamespace(xcom_pull=lambda task_ids=None: xcom),
     }
     return task.render_template(task.bash_command, ctx)
 
 
-def _ingest_months(cmd: str) -> list[str]:
+@pytest.mark.parametrize("since", ["2024-01", "2025-06", "2026-10"])
+def test_rendered_ingest_trips_uses_since(dagbag, since):
+    cmd = _render(dagbag, "ingest_trips", (2026, 10), since)
     args = shlex.split(cmd)
-    i = args.index("--months") + 1
-    j = next(k for k in range(i, len(args)) if args[k].startswith("--"))
-    return args[i:j]
-
-
-@pytest.mark.parametrize(
-    "start, window, expected",
-    [
-        ((2024, 2), None, ["2024-02", "2024-01", "2023-12", "2023-11"]),
-        ((2024, 3), None, ["2024-03", "2024-02", "2024-01", "2023-12"]),
-        ((2024, 12), None, ["2024-12", "2024-11", "2024-10", "2024-09"]),
-        ((2024, 3), 1, ["2024-03"]),
-        ((2025, 1), 12, [
-            "2025-01", "2024-12", "2024-11", "2024-10", "2024-09", "2024-08",
-            "2024-07", "2024-06", "2024-05", "2024-04", "2024-03", "2024-02",
-        ]),
-    ],
-)
-def test_rendered_ingest_trips_window_newest_first(dagbag, start, window, expected):
-    cmd = _render(dagbag, "ingest_trips", start, window)
-    assert _ingest_months(cmd) == expected
+    assert args[args.index("--since") + 1] == since
+    assert "--months" not in args
     assert "--service yellow" in cmd and "--skip-unpublished" in cmd
     assert "-m ingestion.pipeline" in cmd
+
+
+@pytest.mark.parametrize("since", ["2024-1", "24-01", "2024/01", "2024-13", "2024-00", "", "latest", "2024-01 --zones"])
+def test_since_bad_format_rejected(dagbag, since):
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        _render(dagbag, "ingest_trips", (2026, 10), since)
+
+
+def test_since_future_month_rejected(dagbag):
+    with pytest.raises(ValueError, match="after the run month"):
+        _render(dagbag, "ingest_trips", (2024, 3), "2024-04")
+    assert "2024-03" in _render(dagbag, "ingest_trips", (2024, 3), "2024-03")
+
+
+def test_since_param_schema_rejects_bad_format(dagbag):
+    param = dagbag.dags[DAG_ID].params.get_param("ingest_since")
+    with pytest.raises(ParamValidationError):
+        param.resolve("2024-13")
+    with pytest.raises(ParamValidationError):
+        param.resolve("january")
+    assert param.resolve("2025-07") == "2025-07"
 
 
 def _vars(cmd: str) -> dict:
@@ -164,3 +170,24 @@ def test_dbt_build_uses_xcom_of_ingest_trips(dagbag):
 
 def test_rendered_snapshot_vars_parse_as_yaml(dagbag):
     assert _vars(_render(dagbag, "dbt_snapshot")) == {"min_year": 2024, "max_year": 2024}
+
+
+def test_snapshot_vars_cover_backfill_years(dagbag):
+    cmd = _render(dagbag, "dbt_snapshot", (2026, 10), "2024-01")
+    assert _vars(cmd) == {"min_year": 2024, "max_year": 2026}
+
+
+def test_snapshot_vars_since_in_run_year(dagbag):
+    cmd = _render(dagbag, "dbt_snapshot", (2026, 10), "2026-03")
+    assert _vars(cmd) == {"min_year": 2026, "max_year": 2026}
+
+
+def test_dbt_build_backfill_each_month_own_year(dagbag, tmp_path):
+    xcom = "NEW_MONTHS=2024-05 2024-12 2025-01 2026-08"
+    calls = _run_build(_render(dagbag, "dbt_build", (2026, 10), xcom=xcom), tmp_path)
+    assert [_call_vars(c) for c in calls] == [
+        {"min_year": 2024, "max_year": 2024, "run_month": "2024-05"},
+        {"min_year": 2024, "max_year": 2024, "run_month": "2024-12"},
+        {"min_year": 2025, "max_year": 2025, "run_month": "2025-01"},
+        {"min_year": 2026, "max_year": 2026, "run_month": "2026-08"},
+    ]

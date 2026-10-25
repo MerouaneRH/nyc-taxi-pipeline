@@ -1,6 +1,8 @@
 # 0008. Catch-up window for late-published months
 
-Status: Accepted
+Status: Superseded by [0009](0009-full-discovery.md)
+
+Superseded by 0009: the fixed window is replaced by full discovery from a start month.
 
 ## Context and problem
 

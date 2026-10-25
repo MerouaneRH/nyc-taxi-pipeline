@@ -1,4 +1,5 @@
 import io
+from datetime import date
 
 import boto3
 import pyarrow as pa
@@ -510,3 +511,123 @@ def test_zones_only_prints_no_new_months(s3, monkeypatch, capsys):
     responses.add(responses.GET, ZONES_URL, body=ZONES_CSV)
     assert pipeline.main(["--zones"]) == 0
     assert "NEW_MONTHS" not in capsys.readouterr().out
+
+
+# --- discovery: --since, --dry-run ---
+
+TODAY = date(2026, 10, 25)
+
+
+def test_expand_since_in_order_ends_at_current_month():
+    months = pipeline.expand_since("2025-11", date(2026, 2, 3))
+    assert months == ["2025-11", "2025-12", "2026-01", "2026-02"]
+
+
+def test_expand_since_single_month_and_future():
+    assert pipeline.expand_since("2026-10", TODAY) == ["2026-10"]
+    assert pipeline.expand_since("2026-11", TODAY) == []
+
+
+def test_expand_since_full_range_count():
+    months = pipeline.expand_since("2024-01", TODAY)
+    assert len(months) == 34 and months[0] == "2024-01" and months[-1] == "2026-10"
+
+
+def test_since_and_months_mutually_exclusive(capsys):
+    with pytest.raises(SystemExit) as exc:
+        pipeline.main(["--since", "2024-01", "--months", "2024-02"])
+    assert exc.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_since_bad_format_and_future_rejected(capsys):
+    with pytest.raises(SystemExit):
+        pipeline.main(["--since", "24-01"])
+    with pytest.raises(SystemExit):
+        pipeline.main(["--since", "2030-01"], today=TODAY)
+    assert "after the current month" in capsys.readouterr().err
+
+
+@responses.activate
+def test_since_ingests_range_and_unpublished_middle_does_not_stop(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    mock_source(parquet_bytes(), "2024-01")
+    _unpublished("2024-02")
+    mock_source(parquet_bytes(), "2024-03")
+    code = pipeline.main(
+        ["--since", "2024-01", "--skip-unpublished"], today=date(2024, 3, 10)
+    )
+    out = capsys.readouterr()
+    assert code == 0
+    assert out.out.splitlines()[-1] == "NEW_MONTHS=2024-01 2024-03"
+    assert "unpublished" in out.err
+    assert len(list_keys(s3)) == 2
+
+
+@responses.activate
+def test_since_current_month_unpublished_exits_99(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _preload(s3, "2024-01")
+    _unpublished("2024-02")
+    code = pipeline.main(
+        ["--since", "2024-01", "--skip-unpublished"], today=date(2024, 2, 10)
+    )
+    assert code == 99
+    assert capsys.readouterr().out.splitlines()[-1] == "NEW_MONTHS="
+
+
+def _dry(capsys, months=("2024-01", "2024-02", "2024-03"), today=date(2024, 3, 10)):
+    code = pipeline.main(
+        ["--since", months[0], "--skip-unpublished", "--dry-run"], today=today
+    )
+    return code, capsys.readouterr().out.splitlines()
+
+
+@responses.activate
+def test_dry_run_reports_and_never_writes(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _preload(s3, "2024-01")
+    mock_source(parquet_bytes(), "2024-02")
+    _unpublished("2024-03")
+    calls = []
+    monkeypatch.setattr(s3, "put_object", lambda **kw: calls.append("put"))
+    monkeypatch.setattr(s3, "upload_file", lambda *a, **kw: calls.append("upload"))
+    before = list_keys(s3)
+    code, lines = _dry(capsys)
+    assert lines == [
+        "current 2024-01",
+        "would-upload 2024-02",
+        "unpublished 2024-03",
+        "NEW_MONTHS=2024-02",
+    ]
+    assert code == 0
+    assert calls == [] and list_keys(s3) == before
+    assert n_gets() == 0
+
+
+@responses.activate
+def test_dry_run_size_mismatch_would_upload(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    s3.put_object(Bucket=BUCKET, Key=pipeline.month_key("yellow", "2024-01"), Body=b"x")
+    mock_source(parquet_bytes(), "2024-01")
+    code, lines = _dry(capsys, today=date(2024, 1, 10))
+    assert lines == ["would-upload 2024-01", "NEW_MONTHS=2024-01"] and code == 0
+    assert n_gets() == 0
+
+
+@responses.activate
+def test_dry_run_nothing_new_exits_99(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _preload(s3, "2024-01")
+    _unpublished("2024-02")
+    code, lines = _dry(capsys, today=date(2024, 2, 10))
+    assert lines == ["current 2024-01", "unpublished 2024-02", "NEW_MONTHS="]
+    assert code == 99
+
+
+@responses.activate
+def test_dry_run_other_errors_still_raise(s3, monkeypatch):
+    _cli_env(s3, monkeypatch)
+    _unpublished("2024-01", 500)
+    with pytest.raises(requests.HTTPError):
+        pipeline.main(["--months", "2024-01", "--skip-unpublished", "--dry-run"])

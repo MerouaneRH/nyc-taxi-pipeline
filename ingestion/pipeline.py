@@ -2,6 +2,8 @@
 
 Usage:
     uv run python -m ingestion.pipeline --service yellow --months 2024-01 2024-02
+    uv run python -m ingestion.pipeline --service yellow --since 2024-01 --skip-unpublished
+    uv run python -m ingestion.pipeline --since 2024-01 --skip-unpublished --dry-run
     uv run python -m ingestion.pipeline --zones
 
 Env: AWS_PROFILE (default nyc-taxi), S3_BUCKET (default below), region eu-west-3.
@@ -12,6 +14,7 @@ import csv
 import os
 import sys
 import tempfile
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import boto3
@@ -244,12 +247,28 @@ def _month(value: str) -> str:
     return value
 
 
-def main(argv: list[str] | None = None) -> int:
+def expand_since(since: str, today: date) -> list[str]:
+    """Every month from `since` through the month of `today`, oldest first."""
+    year, month = map(int, since.split("-"))
+    months = []
+    while (year, month) <= (today.year, today.month):
+        months.append(f"{year:04d}-{month:02d}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return months
+
+
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--service", choices=sorted(REQUIRED_COLUMNS), default="yellow")
-    parser.add_argument("--months", nargs="+", default=[], type=_month)
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument("--months", nargs="+", default=[], type=_month)
+    which.add_argument(
+        "--since",
+        type=_month,
+        help="every month from YYYY-MM through the current UTC month (discovery)",
+    )
     parser.add_argument(
         "--zones", action="store_true", help="also load taxi_zone_lookup.csv"
     )
@@ -259,15 +278,37 @@ def main(argv: list[str] | None = None) -> int:
         help="on HTTP 403/404 log 'unpublished <url>' and carry on instead of raising; "
         f"exit {EXIT_UNPUBLISHED} when no month was uploaded",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="only HEAD/size checks: print would-upload/current/unpublished per month, "
+        "then NEW_MONTHS=; no download, no upload",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None, today: date | None = None) -> int:
+    parser = _parser()
     args = parser.parse_args(argv)
+    if args.since:
+        today = today or datetime.now(UTC).date()
+        args.months = expand_since(args.since, today)
+        if not args.months:
+            parser.error(f"--since {args.since} is after the current month")
     if not args.zones and not args.months:
-        parser.error("nothing to do: pass --zones and/or --months")
+        parser.error("nothing to do: pass --zones and/or --months/--since")
 
     s3, bucket = make_s3(), bucket_name()
     zones_unpublished = False
     if args.zones:
         zones_status = _run(
-            args, ZONES_URL, ZONES_KEY, bucket, lambda: ingest_zones(s3, bucket)
+            args,
+            ZONES_URL,
+            ZONES_KEY,
+            bucket,
+            lambda: ingest_zones(s3, bucket),
+            label="zones",
+            s3=s3,
         )
         zones_unpublished = zones_status == "unpublished"
     results = {m: _ingest_one(args, s3, bucket, m) for m in args.months}
@@ -287,19 +328,38 @@ def _ingest_one(args, s3, bucket: str, month: str) -> str:
         month_key(args.service, month),
         bucket,
         lambda: ingest_month(s3, bucket, args.service, month),
+        label=month,
+        s3=s3,
     )
 
 
-def _run(args, url: str, key: str, bucket: str, action) -> str:
+def _plan(s3, bucket: str, key: str, url: str) -> str:
+    """Dry-run twin of _sync: same decisions, no GET and no PUT."""
+    if _is_current(s3, bucket, key, url):
+        return "skipped"
+    remote_size(url)  # raises HTTPError 403/404 when unpublished, like the GET would
+    return "uploaded"
+
+
+DRY_LABELS = {"uploaded": "would-upload", "skipped": "current"}
+
+
+def _run(args, url: str, key: str, bucket: str, action, label: str, s3) -> str:
     """Run one unit of work; returns 'uploaded', 'skipped' or 'unpublished'."""
     try:
-        result = action()
+        result = _plan(s3, bucket, key, url) if args.dry_run else action()
     except requests.HTTPError as exc:
         if not (args.skip_unpublished and _is_unpublished(exc)):
             raise
-        print(f"unpublished {url}", file=sys.stderr)
+        if args.dry_run:
+            print(f"unpublished {label}")
+        else:
+            print(f"unpublished {url}", file=sys.stderr)
         return "unpublished"
-    print(f"{result:9} s3://{bucket}/{key}")
+    if args.dry_run:
+        print(f"{DRY_LABELS[result]} {label}")
+    else:
+        print(f"{result:9} s3://{bucket}/{key}")
     return result
 
 

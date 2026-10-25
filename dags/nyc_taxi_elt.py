@@ -1,14 +1,15 @@
 """Monthly NYC taxi ELT: ingest (zones, trips) -> dbt snapshot -> dbt build.
 
-Each run tries a window of the last `ingest_window_months` months ending at
-data_interval_start (newest first). TLC publishes a month about two months late,
-so a later run picks up a month an earlier run found unpublished. Ingestion skips
-months already in S3 with the same size, so re-trying them is cheap and safe.
-ingest_trips prints `NEW_MONTHS=<months uploaded>` as its last line (XCom) and
-exits 99 when nothing was uploaded; dbt_build builds each new month.
+Each run discovers: it checks every month from `ingest_since` (default 2024-01)
+through the current month and ingests any month that TLC has published but S3
+lacks (or holds with a different size). Months not yet published return 403 and
+are skipped; a later run picks them up. ingest_trips prints
+`NEW_MONTHS=<months uploaded>` as its last line (XCom) and exits 99 when nothing
+was uploaded; dbt_build builds each new month, oldest first. See ADR 0009.
 Python/dbt run from a dedicated venv (/opt/venv) to avoid dependency clashes
 with Airflow itself.
 """
+import re
 from datetime import datetime, timedelta
 
 from airflow import DAG
@@ -19,13 +20,11 @@ PY = "/opt/venv/bin/python"
 DBT = "/opt/venv/bin/dbt"
 PROJECT = "/opt/project"
 DBT_DIR = f"{PROJECT}/dbt"
-YEAR = "{{ data_interval_start.year }}"
-VARS = f"--vars '{{min_year: {YEAR}, max_year: {YEAR}}}'"
-# newest first: data_interval_start, then one month back per step, across years
-WINDOW = (
-    "{% for i in range(params.ingest_window_months) %}"
-    "{{ (data_interval_start - macros.dateutil.relativedelta.relativedelta(months=i))"
-    ".strftime('%Y-%m') }} {% endfor %}"
+MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+# snapshot covers every year from the start month's year to the run's year (backfills)
+VARS = (
+    "--vars '{min_year: {{ since_year(params.ingest_since, data_interval_start) }}, "
+    "max_year: {{ data_interval_start.year }}}'"
 )
 # ingest_trips' last stdout line is `NEW_MONTHS=2024-01 2024-02` (oldest first, may be empty)
 NEW_MONTHS = "{{ ti.xcom_pull(task_ids='ingest_trips') or '' }}"
@@ -36,6 +35,19 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
     "retry_exponential_backoff": True,
 }
+
+
+def validated_since(since: str, run_month) -> str:
+    """Return `since` if it is YYYY-MM and not after the run month; else raise."""
+    if not isinstance(since, str) or not MONTH_RE.match(since):
+        raise ValueError(f"ingest_since must be YYYY-MM, got {since!r}")
+    if since > f"{run_month.year:04d}-{run_month.month:02d}":
+        raise ValueError(f"ingest_since {since} is after the run month {run_month:%Y-%m}")
+    return since
+
+
+def since_year(since: str, run_month) -> int:
+    return int(validated_since(since, run_month)[:4])
 
 
 def _bash(task_id: str, cmd: str, **kw) -> BashOperator:
@@ -50,13 +62,13 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     default_args=default_args,
+    user_defined_macros={"validated_since": validated_since, "since_year": since_year},
     params={
-        "ingest_window_months": Param(
-            4,
-            type="integer",
-            minimum=1,
-            maximum=12,
-            description="How many months back (from the run month) ingest_trips tries",
+        "ingest_since": Param(
+            "2024-01",
+            type="string",
+            pattern=MONTH_RE.pattern,
+            description="First month (YYYY-MM) ingest_trips checks; must be <= the run month",
         )
     },
     tags=["nyc-taxi", "elt"],
@@ -64,7 +76,9 @@ with DAG(
     ingest_zones = _bash("ingest_zones", f"{PY} -m ingestion.pipeline --zones")
     ingest_trips = _bash(
         "ingest_trips",
-        f"{PY} -m ingestion.pipeline --months {WINDOW}--service yellow --skip-unpublished",
+        f"{PY} -m ingestion.pipeline --since "
+        "{{ validated_since(params.ingest_since, data_interval_start) }} "
+        "--service yellow --skip-unpublished",
         # exit 99 = nothing uploaded (all current or unpublished): skip dbt, don't fail
         skip_on_exit_code=99,
     )
