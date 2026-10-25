@@ -129,8 +129,7 @@ ingestion/              TLC to S3 loader (pipeline.py is the one the DAG runs)
 dbt/
   models/staging/       stg_trips, stg_zones
   models/marts/         dim_zone, fct_trips, marts, data-quality tables
-  snapshots/            dim_vendor (SCD2)
-  seeds/                vendors.csv
+  snapshots/, seeds/    dim_vendor (SCD2), vendors.csv
   macros/               create_raw_tables (Glue database and external tables)
   tests/                six singular tests
   scripts/              create_workgroup.py (Athena workgroup nyc-taxi-dbt)
@@ -141,15 +140,12 @@ tests/, notebooks/      Python tests, exploration notebook
 docs/                   architecture, data model, runbook, decision records
 ```
 
-`ingestion/download.py` and `ingestion/soda.py` write to local `data/raw` and
-are not part of the DAG.
+`ingestion/download.py` and `ingestion/soda.py` are local helpers, not part of the DAG.
 
 ## Where to read more
 
 [docs/README.md](docs/README.md) lists every document in reading order:
-[architecture](docs/architecture.md) for how data moves,
-[data model](docs/data-model.md) for every model, test and quality rule,
-[runbook](docs/sop.md) for commands, and [decisions](docs/adr/) for why.
+architecture, data model, runbook and decision records.
 
 ## Known limitations
 
