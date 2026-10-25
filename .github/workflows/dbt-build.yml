@@ -46,5 +46,8 @@ jobs:
       - name: Build and test
         working-directory: dbt
         run: |
+          # min_year..max_year must cover every loaded year: mart_month_quality is a table
+          # that reads raw over that range. run_month limits each incremental model to one
+          # month (a fast check, not a rebuild of the whole history).
           uv run --frozen --group dbt dbt build --profiles-dir . --target ci \
-            --vars '{min_year: 2024, max_year: 2024}'
+            --vars "{min_year: 2024, max_year: $(date -u +%Y), run_month: \"2024-01\"}"

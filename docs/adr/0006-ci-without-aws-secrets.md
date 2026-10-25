@@ -19,7 +19,7 @@ Pull-request CI that holds AWS keys exposes credentials and risks cost on a pers
 - `dag-tests`: Airflow 2.10.5 with its constraint file, running `tests/dags`. This is a separate job because the project's dependencies conflict with the constraint file.
 - `dbt-parse`: `dbt deps` and `dbt parse` with placeholder environment values.
 
-`.github/workflows/dbt-build.yml` runs `dbt build` on Athena for pushes to `main` that change `dbt/**`, and for manual dispatch. It has `id-token: write`, assumes the role in the repository variable `AWS_DBT_ROLE_ARN` through GitHub OIDC (no stored keys), and uses the `ci` target in `dbt/profiles.yml`. A concurrency group stops two builds from running at once. It builds 2024 only.
+`.github/workflows/dbt-build.yml` runs `dbt build` on Athena for pushes to `main` that change `dbt/**`, and for manual dispatch. It has `id-token: write`, assumes the role in the repository variable `AWS_DBT_ROLE_ARN` through GitHub OIDC (no stored keys), and uses the `ci` target in `dbt/profiles.yml`. A concurrency group stops two builds from running at once. It builds with `min_year` 2024, `max_year` the current year and `run_month` 2024-01. An earlier version used `max_year` 2024, which made `mart_month_quality` keep only 2024 after a push that touched `dbt/**`.
 
 ## Consequences
 

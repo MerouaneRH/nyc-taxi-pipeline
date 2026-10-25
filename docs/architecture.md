@@ -184,7 +184,7 @@ Two GitHub workflows, both described in
 [ADR 0006](adr/0006-ci-without-aws-secrets.md).
 
 - `ci.yml` runs on pull requests with no AWS credentials. Jobs: `lint-test` (ruff and pytest without the DAG tests), `dag-tests` (Airflow 2.10.5 with its constraint file) and `dbt-parse` (`dbt deps` and `dbt parse` only).
-- `dbt-build.yml` runs the real `dbt build` on Athena. It triggers on pushes to `main` that touch `dbt/**` and on manual dispatch, never on pull requests. It gets AWS credentials from GitHub OIDC through the role in the repository variable `AWS_DBT_ROLE_ARN`, uses the `ci` target in `dbt/profiles.yml`, and builds 2024 only.
+- `dbt-build.yml` runs the real `dbt build` on Athena. It triggers on pushes to `main` that touch `dbt/**` and on manual dispatch, never on pull requests. It gets AWS credentials from GitHub OIDC through the role in the repository variable `AWS_DBT_ROLE_ARN`, uses the `ci` target in `dbt/profiles.yml`, and runs `dbt build` with `min_year` 2024, `max_year` the current year and `run_month` 2024-01. The year range covers every loaded year because `mart_month_quality` reads raw over it, and `run_month` keeps each incremental model to one month, so the run is a quick check and not a rebuild of the whole history.
 
 ## 9. Local runtime
 
