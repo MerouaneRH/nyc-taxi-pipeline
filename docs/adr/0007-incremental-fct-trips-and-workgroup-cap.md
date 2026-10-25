@@ -24,7 +24,7 @@ Later, `mart_hourly_borough`, `mart_od_pairs` and `dq_suspect_trips` adopted the
 
 ## Consequences
 
-- Measured on 2024-01 and 2024-02 only (5,900,444 rows), in the `primary` workgroup: a full refresh built `fct_trips` in 54.8 s and scanned 97 MB. An incremental run with `run_month=2024-02` took 55 to 61 s and scanned 49 MB (temporary table) plus 145 MB (insert from the temporary table). At two months of data the incremental run is not faster and scans more, because dbt-athena first writes `fct_trips__dbt_tmp` and then inserts from it. The cost of an incremental run stays flat as months pile up, while a full rebuild grows. The break-even is expected at three or four months. This was not measured.
+- An early test, run with only 2024-01 and 2024-02 loaded (5,900,444 rows) in the `primary` workgroup and not repeated since: a full refresh built `fct_trips` in 54.8 s and scanned 97 MB. An incremental run with `run_month=2024-02` took 55 to 61 s and scanned 49 MB (temporary table) plus 145 MB (insert from the temporary table). At two months of data the incremental run is not faster and scans more, because dbt-athena first writes `fct_trips__dbt_tmp` and then inserts from it. The cost of an incremental run should stay flat as months pile up, while a full rebuild grows. The break-even is expected at three or four months. This was not measured.
 - Partitioned hive output makes many small files when months are small. That is acceptable at this size.
 - A query above 5 GiB fails. A full rebuild of many years may need a higher cap.
 - The workgroup `nyc-taxi-dbt` exists with the cap enforced. The measurements above predate it.

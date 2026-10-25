@@ -31,14 +31,14 @@ flowchart LR
     TLC -->|"size check, download"| ING
     ING -->|"upload"| RAW
     RAW -->|"read in place"| ATH
-    DBT -->|"runs SQL"| ATH
+    DBT -.->|"sends SQL"| ATH
     ATH -->|"writes models"| WH
     WH -->|"Athena queries"| APP
     AF -.->|"runs"| ING
     AF -.->|"runs"| DBT
 ```
 
-Solid arrows show data. Dashed arrows show Airflow starting a step.
+Solid arrows carry data or queries. Dashed arrows are commands: Airflow starting a step, and dbt sending SQL to Athena.
 
 | Layer | Tool |
 |---|---|

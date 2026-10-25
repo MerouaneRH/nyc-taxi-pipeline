@@ -46,13 +46,14 @@ flowchart LR
     FCT -->|"speed check"| MQ
 ```
 
-Cylinders are the raw sources, rectangles are building blocks, and rounded
-shapes are tables the dashboard reads. Every arrow means "is built from".
-`fct_trips` is the hub: one row per trip, joined to zones and vendors. The
-three marts at the top right and the two quality tables below them are all
-summaries of `fct_trips`. `mart_month_quality` is the exception. It also
-reads the raw table and `stg_trips` to compare row counts before and after
-cleaning.
+Cylinders are the raw sources, rectangles are models that other models use,
+and rounded shapes are tables the dashboard reads. An arrow points from an
+input to the model built from it. `fct_trips` is the hub: one row per trip,
+joined to zones and vendors. The three marts and `dq_suspect_trips` are
+summaries or filters of `fct_trips`, and `mart_dq_summary` summarizes
+`dq_suspect_trips`. `mart_month_quality` has three inputs. It reads the raw
+table and `stg_trips` to compare row counts before and after cleaning, and
+`fct_trips` for the speed check.
 
 ## Models at a glance
 
@@ -188,6 +189,10 @@ Suspect trips stay in every dashboard number. The Data quality view explains eac
 code and suggests keeping suspect trips in revenue but leaving them out of speed
 and efficiency figures. Nothing applies that suggestion yet.
 
+The dashboard's own wording for `TIMESTAMP_SUSPECT` is inaccurate. It says the
+dropoff is at or before the pickup, but staging already drops those rows. The real
+rule is a duration under 60 seconds with a distance of at least 1 mile.
+
 ### How rows flow through the quality checks
 
 ```mermaid
@@ -205,9 +210,9 @@ flowchart LR
     SUS -->|"example rows"| APP
 ```
 
-A trip can leave the data in two ways. Staging removes it (the "removed" box),
-and then nothing but a count remains. Or the rules flag it, and it stays in
-`fct_trips` with a reason attached. The dashed lines show the counts that
+A trip takes one of two paths. Staging removes it (the "removed" box), and only
+a count remains. Or it is kept: it enters `fct_trips`, and if a rule matches, it
+is also flagged in `dq_suspect_trips` with a reason. It never leaves `fct_trips`. The dashed lines show the counts that
 `mart_month_quality` keeps so you can compare raw rows with staged rows. The
 Data quality page reads all three quality tables.
 

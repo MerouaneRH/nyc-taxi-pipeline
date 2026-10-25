@@ -159,10 +159,10 @@ docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt
    - `ingest_trips`: one `uploaded`, `skipped` or `unpublished` line per month, then `NEW_MONTHS=...`.
    - `dbt_build`: one dbt build per new month. The first failed model or test ends the loop.
 4. Look up the error in [Troubleshooting](#troubleshooting).
-5. Fix the cause, then clear the failed task. In the UI, select Clear. Downstream tasks rerun. From the CLI:
+5. Fix the cause, then clear the failed task. Try the UI first: select the task and choose Clear. Downstream tasks rerun. From the CLI, take the run's logical date from the `list-runs` output (the DAG runs every 6 hours, so use the full timestamp) and pass it as both ends of the range. The date below is only an example:
    ```bash
    docker compose exec airflow-scheduler airflow tasks clear nyc_taxi_elt \
-     --task-regex dbt_build --start-date 2025-04-01 --end-date 2025-04-01 --yes
+     --task-regex dbt_build --start-date 2026-10-25T06:00:00 --end-date 2026-10-25T06:00:00 --yes
    ```
 
 Reruns are safe. Ingestion skips files whose size matches, and each month's
