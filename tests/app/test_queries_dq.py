@@ -76,3 +76,11 @@ def test_distribution_query_aggregates_in_sql(code):
 def test_distribution_axis_labels():
     assert "mph" in queries_dq.DIST_AXIS["SPEED_IMPLAUSIBLE"]
     assert set(queries_dq.DIST_AXIS) == set(dq_reasons.REASON_CODES)
+
+
+def test_timestamp_suspect_distribution_is_in_seconds():
+    # The rule only keeps trips under 60 s, so minute-wide buckets would put every row in one bar.
+    axis = queries_dq.DIST_AXIS["TIMESTAMP_SUSPECT"]
+    assert "seconds" in axis and "negative" not in axis
+    sql, _ = queries_dq.build_distribution_query(date(2024, 1, 1), date(2024, 2, 29), "TIMESTAMP_SUSPECT")
+    assert "* 60" in sql

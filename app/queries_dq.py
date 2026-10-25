@@ -38,8 +38,8 @@ _DIST = {
     "ZERO_DISTANCE_PAID": ("least(cast(floor(total_amount / 10) as integer), 20) * 10",
                            "Amount paid, USD (bucket start, 200+ pooled)"),
     "TIMESTAMP_SUSPECT": (
-        "greatest(least(cast(floor(trip_duration_min / 10) as integer), 12), -12) * 10",
-        "Duration, minutes (bucket start, negative = dropoff before pickup)"),
+        "cast(floor(trip_duration_min * 60 / 10) as integer) * 10",
+        "Duration, seconds (bucket start; this rule keeps trips under 60 s)"),
     "LONG_DURATION": ("least(cast(floor(trip_duration_min / 60) as integer), 72)",
                       "Duration, hours (bucket start, 72+ pooled)"),
     "ZERO_TOTAL": ("least(cast(floor(trip_distance_miles / 5) as integer), 12) * 5",
