@@ -1,11 +1,15 @@
 """DAG import + structure tests for nyc_taxi_elt."""
+import importlib.util
+import logging
 import shlex
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pendulum
 import pytest
+import requests
 import yaml
 
 pytest.importorskip("airflow")
@@ -31,6 +35,7 @@ def test_task_ids(dagbag):
     assert dag is not None
     assert set(dag.task_ids) == {
         "ingest_zones", "ingest_trips", "dbt_prepare", "dbt_snapshot", "dbt_build",
+        "notify_new",
     }
 
 
@@ -41,13 +46,14 @@ def test_dependency_order(dagbag):
     assert down["ingest_trips"] == {"dbt_prepare"}
     assert down["dbt_prepare"] == {"dbt_snapshot"}
     assert down["dbt_snapshot"] == {"dbt_build"}
-    assert down["dbt_build"] == set()
+    assert down["dbt_build"] == {"notify_new"}
+    assert down["notify_new"] == set()
 
 
 def test_schedule_and_catchup_bounded(dagbag):
     dag = dagbag.dags.get(DAG_ID)
     assert dag.catchup is False
-    assert dag.schedule_interval == "@monthly"
+    assert dag.schedule_interval == "0 */6 * * *"
     assert (dag.start_date.year, dag.start_date.month) == (2024, 1)
     assert dag.max_active_runs == 1
 
@@ -72,12 +78,14 @@ def test_since_param_definition(dagbag):
     assert param.schema["type"] == "string"
 
 
-def _render(dagbag, task_id: str, start=(2024, 3), since="2024-01", xcom=None) -> str:
+def _render(
+    dagbag, task_id: str, start=(2024, 3), since="2024-01", xcom=None, until=""
+) -> str:
     dag = dagbag.dags[DAG_ID]
     task = dag.get_task(task_id)
     ctx = {
         "data_interval_start": pendulum.datetime(*start, 1, tz="UTC"),
-        "params": {"ingest_since": since},
+        "params": {"ingest_since": since, "ingest_until": until},
         "macros": macros,  # same object Airflow puts in the task context
         "ti": SimpleNamespace(xcom_pull=lambda task_ids=None: xcom),
     }
@@ -191,3 +199,157 @@ def test_dbt_build_backfill_each_month_own_year(dagbag, tmp_path):
         {"min_year": 2025, "max_year": 2025, "run_month": "2025-01"},
         {"min_year": 2026, "max_year": 2026, "run_month": "2026-08"},
     ]
+
+
+# --- ingest_until: bounded batches ---
+
+
+def test_until_param_definition(dagbag):
+    param = dagbag.dags[DAG_ID].params.get_param("ingest_until")
+    assert param.value == ""
+    assert param.schema["type"] == "string"
+    assert param.resolve("2024-12") == "2024-12"
+    assert param.resolve("") == ""
+    with pytest.raises(ParamValidationError):
+        param.resolve("2024-13")
+
+
+def test_rendered_ingest_trips_with_until(dagbag):
+    args = shlex.split(_render(dagbag, "ingest_trips", (2026, 10), "2024-01", until="2024-12"))
+    assert args[args.index("--since") + 1] == "2024-01"
+    assert args[args.index("--until") + 1] == "2024-12"
+    assert "--skip-unpublished" in args and "--months" not in args
+
+
+@pytest.mark.parametrize("until", ["", None])
+def test_rendered_ingest_trips_without_until_when_empty(dagbag, until):
+    cmd = _render(dagbag, "ingest_trips", (2026, 10), "2024-01", until=until)
+    assert "--until" not in cmd
+    assert "--since 2024-01" in cmd and "--skip-unpublished" in cmd
+
+
+@pytest.mark.parametrize("until", ["2024-1", "24-12", "2024/12", "2024-13", "2024-00", "dec", "2024-12 --zones"])
+def test_until_bad_format_rejected(dagbag, until):
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        _render(dagbag, "ingest_trips", (2026, 10), "2024-01", until=until)
+
+
+def test_until_before_since_rejected_equal_ok(dagbag):
+    with pytest.raises(ValueError, match="before ingest_since"):
+        _render(dagbag, "ingest_trips", (2026, 10), "2024-06", until="2024-05")
+    assert "--until 2024-06" in _render(dagbag, "ingest_trips", (2026, 10), "2024-06", until="2024-06")
+
+
+# --- ntfy notifications ---
+
+
+@pytest.fixture(scope="module")
+def mod():
+    spec = importlib.util.spec_from_file_location("nyc_taxi_elt_under_test", DAGS / "nyc_taxi_elt.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def ntfy(mod):
+    """Patch Variable and requests.post; yields the post mock. Topic is 'topic-x'."""
+    with mock.patch.object(mod.Variable, "get", return_value="topic-x"), \
+            mock.patch.object(mod.requests, "post") as post:
+        yield post
+
+
+def _ti(xcom):
+    return SimpleNamespace(xcom_pull=lambda task_ids=None: xcom)
+
+
+def _run_with(dbt_state):
+    return SimpleNamespace(get_task_instance=lambda task_id: SimpleNamespace(state=dbt_state))
+
+
+def test_notify_posts_to_topic_with_timeout(mod, ntfy):
+    assert mod.notify("T", "hello", "high") is True
+    url = ntfy.call_args.args[0]
+    assert url == "https://ntfy.sh/topic-x"
+    assert ntfy.call_args.kwargs["timeout"] == 10
+    assert ntfy.call_args.kwargs["data"] == b"hello"
+    assert ntfy.call_args.kwargs["headers"] == {"Title": "T", "Priority": "high"}
+
+
+@pytest.mark.parametrize("topic", ["", None, "  ", "bad/topic", "a b", "t?x=1"])
+def test_notify_noop_without_valid_topic(mod, topic, caplog):
+    with mock.patch.object(mod.Variable, "get", return_value=topic), \
+            mock.patch.object(mod.requests, "post") as post, caplog.at_level(logging.INFO):
+        assert mod.notify("T", "m") is False
+    post.assert_not_called()
+    assert caplog.text  # a log line says why nothing was sent
+
+
+def test_notify_reads_variable_with_empty_default(mod):
+    with mock.patch.object(mod.Variable, "get", return_value="") as get:
+        mod.notify("T", "m")
+    get.assert_called_once_with("NTFY_TOPIC", default_var="")
+
+
+@pytest.mark.parametrize("exc", [requests.ConnectionError("down"), requests.Timeout(), RuntimeError("x")])
+def test_notify_never_raises_when_post_fails(mod, ntfy, exc):
+    ntfy.side_effect = exc
+    assert mod.notify("T", "m") is False
+
+
+def test_notify_never_raises_when_variable_fails(mod):
+    with mock.patch.object(mod.Variable, "get", side_effect=RuntimeError("db down")), \
+            mock.patch.object(mod.requests, "post") as post:
+        assert mod.notify("T", "m") is False
+    post.assert_not_called()
+
+
+def test_notify_new_sends_nothing_for_empty_new_months(mod, ntfy):
+    for xcom in ("NEW_MONTHS=", "", None):
+        mod.notify_loaded(ti=_ti(xcom), dag_run=_run_with("success"))
+    ntfy.assert_not_called()
+
+
+def test_notify_new_text_for_two_months(mod, ntfy):
+    mod.notify_loaded(ti=_ti("NEW_MONTHS=2024-05 2024-06"), dag_run=_run_with("success"))
+    assert ntfy.call_count == 1
+    assert ntfy.call_args.kwargs["data"] == b"NYC taxi ELT: loaded 2024-05, 2024-06, built in dbt"
+
+
+def test_notify_new_silent_when_dbt_build_not_successful(mod, ntfy):
+    for state in ("failed", "upstream_failed", "skipped", None):
+        mod.notify_loaded(ti=_ti("NEW_MONTHS=2024-05"), dag_run=_run_with(state))
+    ntfy.assert_not_called()
+
+
+def test_notify_new_ignores_non_month_tokens(mod, ntfy):
+    mod.notify_loaded(ti=_ti("NEW_MONTHS=2024-05 s3://secret@bucket"), dag_run=_run_with("success"))
+    assert ntfy.call_args.kwargs["data"] == b"NYC taxi ELT: loaded 2024-05, built in dbt"
+
+
+def test_notify_new_never_raises(mod, ntfy):
+    ntfy.side_effect = requests.ConnectionError()
+    mod.notify_loaded(ti=_ti("NEW_MONTHS=2024-05"), dag_run=_run_with("success"))
+    mod.notify_loaded(ti=None, dag_run=None)
+
+
+def test_failure_callback_sends_high_priority(mod, ntfy):
+    ctx = {"task_instance": SimpleNamespace(task_id="dbt_build"), "run_id": "manual__2026-10-25"}
+    mod.notify_failure(ctx)
+    assert ntfy.call_args.kwargs["data"] == b"NYC taxi ELT: task dbt_build failed in run manual__2026-10-25"
+    assert ntfy.call_args.kwargs["headers"]["Priority"] == "high"
+
+
+def test_failure_callback_never_raises(mod, ntfy):
+    ntfy.side_effect = RuntimeError("boom")
+    mod.notify_failure({"task_instance": SimpleNamespace(task_id="x"), "run_id": "r"})
+    mod.notify_failure({})
+
+
+def test_dag_wiring_for_notifications(dagbag):
+    dag = dagbag.dags[DAG_ID]
+    assert dag.default_args["on_failure_callback"].__name__ == "notify_failure"
+    t = dag.get_task("notify_new")
+    assert str(t.trigger_rule) == "all_done"
+    assert t.retries == 0
+    assert dag.get_task("ingest_trips").skip_on_exit_code == [99]

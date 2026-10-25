@@ -53,7 +53,7 @@ mkdir -p .aws-airflow    # copy only the nyc-taxi profile from ~/.aws into it (c
 docker compose up --build -d
 ```
 
-Open `http://localhost:8080` (bound to `127.0.0.1` only), log in with `AIRFLOW_ADMIN_USER` (default `admin`), unpause `nyc_taxi_elt`. Task order: `ingest_zones`, `ingest_trips`, `dbt_prepare`, `dbt_snapshot`, `dbt_build`. Settings: `@monthly`, `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`, 3 retries with exponential backoff from 5 minutes.
+Open `http://localhost:8080` (bound to `127.0.0.1` only), log in with `AIRFLOW_ADMIN_USER` (default `admin`), unpause `nyc_taxi_elt`. Task order: `ingest_zones`, `ingest_trips`, `dbt_prepare`, `dbt_snapshot`, `dbt_build`, `notify_new`. Settings: schedule `0 */6 * * *` (every 6 hours, ADR 0010), `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`, 3 retries with exponential backoff from 5 minutes.
 
 Each run discovers months (ADR 0009): `ingest_trips` runs `ingestion.pipeline --since <ingest_since>` and checks every month from `ingest_since` (default `2024-01`) through the current month. `dbt_snapshot` takes `min_year` from the year of `ingest_since` and `max_year` from the run's year, so a backfill is covered. `dbt_build` builds each month that `ingest_trips` uploaded in this run (oldest first), with `--select stg_zones+ stg_trips+`, that month's own year as `min_year`/`max_year`, and `run_month` set to the month.
 
@@ -82,6 +82,37 @@ docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt \
 
 To change the default, edit the `Param("2024-01", ...)` in `dags/nyc_taxi_elt.py` and restart the scheduler. The `--conf` form was not run here; check the rendered `--since` value in the `ingest_trips` log. Months before the start month are never checked.
 
+### Load a year in a batch
+
+`ingest_until` (`YYYY-MM`, inclusive, default empty = current month) bounds the range with `ingest_since`. It must be `>= ingest_since` and well formed, otherwise the `ingest_trips` task fails at render time. To load 2024 in one run:
+
+```bash
+docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt \
+  --conf '{"ingest_since": "2024-01", "ingest_until": "2024-12"}'
+```
+
+The 6-hourly runs that follow use the defaults again (no `--until`). This `--conf` form was not run here; check the rendered `--since`/`--until` in the `ingest_trips` log.
+
+### Notifications
+
+Messages go to ntfy.sh. Set or change the topic in the Airflow Variable `NTFY_TOPIC`; it takes effect on the next send, no restart:
+
+```bash
+docker compose exec airflow-scheduler airflow variables set NTFY_TOPIC <topic>
+```
+
+Use a long random topic (letters, digits, `_`, `-`): anyone who knows the name can read the messages. An empty or missing Variable means no messages and a log line. Subscribe to the topic in the ntfy app or at `https://ntfy.sh/<topic>`.
+
+- `notify_new` sends `NYC taxi ELT: loaded <months>, built in dbt` when a run loaded months and `dbt_build` succeeded. A run with nothing new sends nothing.
+- A failed task sends, at high priority, `NYC taxi ELT: task <task_id> failed in run <run_id>`.
+- A failed send is logged and never changes task state.
+
+Not verified here: real delivery, and the XCom hand-off in a real run.
+
+### Behaviour when nothing is new
+
+The DAG runs every 6 hours. If every month is current or unpublished, `ingest_trips` exits 99 and is skipped, so `dbt_prepare`, `dbt_snapshot` and `dbt_build` are skipped, `notify_new` runs and sends nothing, and the run costs only the HEAD checks (one S3 head plus one HTTP HEAD per month). A month TLC publishes is loaded by the next run, within about 6 hours.
+
 ### Backfill cost
 
 Each missing month downloads about 60 MB and then triggers one `dbt build` of about 2 minutes, run one after the other. A 28-month backfill (2024-05 to 2026-08) is about 1.7 GB and about an hour of dbt builds, all inside one `dbt_build` task; if a build fails the task retries and redoes finished months (builds are idempotent). Request count per run grows with the months since the start month.
@@ -102,27 +133,11 @@ uv run dbt build --project-dir dbt --profiles-dir dbt --target athena \
 
 To re-download the source file as well, delete the S3 object first (see Rerun a failed task).
 
-Trigger one month by hand. For `@monthly`, a run with logical date 2025-04-01 has data interval 2025-03-01 to 2025-04-01, so it processes March 2025:
-
-```bash
-docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt \
-  --exec-date 2025-04-01T00:00:00+00:00
-```
-
-This mapping follows from Airflow's data-interval rules and has not been tested here. Verify with `airflow dags test nyc_taxi_elt 2025-04-01` before relying on it, and check the month in the `ingest_trips` log.
+To load a specific range, trigger with `ingest_since` and `ingest_until` (see Load a year in a batch). Discovery does not depend on the run date: it uses `ingest_since` and the current UTC month. Do not use `airflow dags backfill` for this: with a 6-hourly schedule it creates one run per 6 hours and each would repeat the same discovery.
 
 ## Backfill
 
-Airflow, for a date range (one run at a time because of `max_active_runs=1`):
-
-```bash
-docker compose exec airflow-scheduler airflow dags backfill nyc_taxi_elt \
-  --start-date 2025-01-01 --end-date 2025-06-01
-```
-
-Each run processes the month before its logical date (the data interval start), so the range above covers December 2024 to May 2025 and also needs the `min_year`/`max_year` of each run's year. Verify the months with `airflow dags test` first. The backfill command was not run here.
-
-Without Airflow, loop over months:
+Use the batch trigger above. Without Airflow, loop over months:
 
 ```bash
 uv run python -m ingestion.pipeline --service yellow --months 2024-01 2024-02 2024-03

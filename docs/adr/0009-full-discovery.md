@@ -2,6 +2,8 @@
 
 Status: Accepted (supersedes [0008](0008-catch-up-window-for-late-months.md))
 
+Note: the `@monthly` schedule described here is superseded by [0010](0010-six-hourly-discovery-and-notifications.md) for scheduling only.
+
 ## Context and problem
 
 ADR 0008 tried the last N months on each run. A month older than the window that was missing in S3 (for example 2024-05 to 2026-08 when the bucket only held 2024-01 to 2024-04) was never loaded, and the window had to be tuned by hand. The pipeline should converge on "every month TLC has published is in S3" without a parameter that guesses how late TLC is.

@@ -42,19 +42,20 @@ flowchart LR
 
 ## Orchestration
 
-DAG `nyc_taxi_elt`, schedule `@monthly`, `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`.
+DAG `nyc_taxi_elt`, schedule `0 */6 * * *` (every 6 hours, ADR 0010), `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`.
 
 ```mermaid
 flowchart LR
-    ingest_zones --> ingest_trips --> dbt_prepare --> dbt_snapshot --> dbt_build
+    ingest_zones --> ingest_trips --> dbt_prepare --> dbt_snapshot --> dbt_build --> notify_new
 ```
 
 - Tasks are `BashOperator` calls with working directory `/opt/project`.
 - Python and dbt run from `/opt/venv`, separate from Airflow's own environment, to avoid dependency conflicts.
-- Each run passes `--since <ingest_since>` to `ingestion.pipeline` (DAG param, `YYYY-MM`, default `2024-01`, validated, not after the run month). The loader expands it to every month through the current UTC month and ingests the published-but-missing ones. `dbt_snapshot` takes `min_year` from the year of `ingest_since` and `max_year` from the run's year. See ADR 0009.
+- Each run passes `--since <ingest_since>` to `ingestion.pipeline` (DAG param, `YYYY-MM`, default `2024-01`, validated, not after the run month). The loader expands it to every month through the current UTC month and ingests the published-but-missing ones. `dbt_snapshot` takes `min_year` from the year of `ingest_since` and `max_year` from the run's year. See ADR 0009. The optional DAG param `ingest_until` (`YYYY-MM`, default empty) adds `--until` for a bounded batch; the DAG checks the format and `ingest_since <= ingest_until` at render time.
 - `ingest_trips` uses `--skip-unpublished` and `skip_on_exit_code=99`. Months TLC has not published (CloudFront returns 403) are skipped individually. The last stdout line `NEW_MONTHS=<uploaded months, oldest first>` goes to XCom. Exit 0 if a month was uploaded, 99 if not; on 99 the downstream tasks are skipped.
 - `dbt_prepare` runs `dbt run-operation create_raw_tables` and `dbt seed` (idempotent). `dbt_snapshot` runs `dbt snapshot` only; it does not run `dbt deps`.
 - `dbt_build` loops over the months in the `NEW_MONTHS` XCom value (oldest first) and runs `dbt build --select stg_zones+ stg_trips+` for each, with that month's year and `run_month`, so only that month's `fct_trips` partition is rewritten. An empty list does nothing.
+- `notify_new` is a `PythonOperator` with `trigger_rule=all_done` and no retries. It reads the `NEW_MONTHS` XCom of `ingest_trips` and, only if non-empty and `dbt_build` succeeded, sends `NYC taxi ELT: loaded <months>, built in dbt` through `notify()`. `default_args["on_failure_callback"]` sends a high-priority `NYC taxi ELT: task <task_id> failed in run <run_id>`. `notify()` POSTs to `https://ntfy.sh/<NTFY_TOPIC>` (Airflow Variable, empty = no-op) with a 10 second timeout and catches every exception. See ADR 0010.
 - Defaults: owner `data-eng`, 3 retries, 5 minute delay, exponential backoff.
 
 ## Local runtime (Docker Compose)
@@ -82,4 +83,5 @@ Three jobs on pull requests, no secrets: lint plus unit tests, DAG import tests,
 - [0006 CI without AWS secrets](adr/0006-ci-without-aws-secrets.md)
 - [0007 Incremental fct_trips and capped workgroup](adr/0007-incremental-fct-trips-and-workgroup-cap.md)
 - [0008 Catch-up window for late months](adr/0008-catch-up-window-for-late-months.md) (superseded)
-- [0009 Full discovery of TLC months](adr/0009-full-discovery.md)
+- [0009 Full discovery of TLC months](adr/0009-full-discovery.md) (schedule superseded by 0010)
+- [0010 Six-hourly discovery, batch ranges and ntfy notifications](adr/0010-six-hourly-discovery-and-notifications.md)

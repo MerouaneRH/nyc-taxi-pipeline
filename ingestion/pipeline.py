@@ -3,6 +3,7 @@
 Usage:
     uv run python -m ingestion.pipeline --service yellow --months 2024-01 2024-02
     uv run python -m ingestion.pipeline --service yellow --since 2024-01 --skip-unpublished
+    uv run python -m ingestion.pipeline --since 2024-01 --until 2024-12 --skip-unpublished
     uv run python -m ingestion.pipeline --since 2024-01 --skip-unpublished --dry-run
     uv run python -m ingestion.pipeline --zones
 
@@ -247,11 +248,17 @@ def _month(value: str) -> str:
     return value
 
 
-def expand_since(since: str, today: date) -> list[str]:
-    """Every month from `since` through the month of `today`, oldest first."""
+def expand_since(since: str, today: date, until: str | None = None) -> list[str]:
+    """Every month from `since` through `until` (inclusive) or the month of `today`.
+
+    `until` never reaches past the month of `today`. Oldest first.
+    """
     year, month = map(int, since.split("-"))
+    last = (today.year, today.month)
+    if until:
+        last = min(last, tuple(map(int, until.split("-"))))
     months = []
-    while (year, month) <= (today.year, today.month):
+    while (year, month) <= last:
         months.append(f"{year:04d}-{month:02d}")
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return months
@@ -268,6 +275,11 @@ def _parser() -> argparse.ArgumentParser:
         "--since",
         type=_month,
         help="every month from YYYY-MM through the current UTC month (discovery)",
+    )
+    parser.add_argument(
+        "--until",
+        type=_month,
+        help="with --since: last month to check (inclusive); default the current UTC month",
     )
     parser.add_argument(
         "--zones", action="store_true", help="also load taxi_zone_lookup.csv"
@@ -290,9 +302,13 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None, today: date | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.until and not args.since:
+        parser.error("--until requires --since")
+    if args.until and args.until < args.since:
+        parser.error(f"--until {args.until} is before --since {args.since}")
     if args.since:
         today = today or datetime.now(UTC).date()
-        args.months = expand_since(args.since, today)
+        args.months = expand_since(args.since, today, args.until)
         if not args.months:
             parser.error(f"--since {args.since} is after the current month")
     if not args.zones and not args.months:

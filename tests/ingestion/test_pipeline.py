@@ -631,3 +631,69 @@ def test_dry_run_other_errors_still_raise(s3, monkeypatch):
     _unpublished("2024-01", 500)
     with pytest.raises(requests.HTTPError):
         pipeline.main(["--months", "2024-01", "--skip-unpublished", "--dry-run"])
+
+
+# --- --until: inclusive upper bound for batch loads ---
+
+
+def test_expand_since_until_bounds_window():
+    assert pipeline.expand_since("2024-11", TODAY, until="2025-02") == [
+        "2024-11", "2024-12", "2025-01", "2025-02",
+    ]
+    assert pipeline.expand_since("2024-05", TODAY, until="2024-05") == ["2024-05"]
+
+
+def test_expand_since_until_past_current_month_is_capped():
+    months = pipeline.expand_since("2026-09", TODAY, until="2027-03")
+    assert months == ["2026-09", "2026-10"]
+
+
+def test_until_requires_since(capsys):
+    with pytest.raises(SystemExit) as exc:
+        pipeline.main(["--months", "2024-01", "--until", "2024-03"])
+    assert exc.value.code == 2
+    assert "--until requires --since" in capsys.readouterr().err
+
+
+def test_until_with_months_still_rejected(capsys):
+    with pytest.raises(SystemExit):
+        pipeline.main(["--since", "2024-01", "--months", "2024-02", "--until", "2024-03"])
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_until_before_since_and_bad_format_rejected(capsys):
+    with pytest.raises(SystemExit):
+        pipeline.main(["--since", "2024-05", "--until", "2024-04"], today=TODAY)
+    assert "before --since" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        pipeline.main(["--since", "2024-05", "--until", "2024-13"], today=TODAY)
+    with pytest.raises(SystemExit):
+        pipeline.main(["--since", "2024-05", "--until", "may"], today=TODAY)
+
+
+@responses.activate
+def test_until_bounds_ingest_to_window(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    for month in ("2024-01", "2024-02"):
+        mock_source(parquet_bytes(), month)  # 2024-03 is not mocked: touching it would fail
+    code = pipeline.main(
+        ["--since", "2024-01", "--until", "2024-02", "--skip-unpublished"],
+        today=date(2024, 3, 10),
+    )
+    assert code == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "NEW_MONTHS=2024-01 2024-02"
+    assert len(list_keys(s3)) == 2
+
+
+@responses.activate
+def test_until_dry_run_lists_only_window(s3, monkeypatch, capsys):
+    _cli_env(s3, monkeypatch)
+    _preload(s3, "2024-01")
+    mock_source(parquet_bytes(), "2024-02")
+    code = pipeline.main(
+        ["--since", "2024-01", "--until", "2024-02", "--skip-unpublished", "--dry-run"],
+        today=date(2024, 3, 10),
+    )
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert out == ["current 2024-01", "would-upload 2024-02", "NEW_MONTHS=2024-02"]

@@ -20,7 +20,7 @@ flowchart LR
     SNAP --> FCT
     FCT --> MARTS["marts<br/>daily_zone_revenue, hourly_borough,<br/>od_pairs, month_quality"]
     MARTS --> ST["Streamlit app<br/>app/main.py"]
-    AF{{"Airflow<br/>monthly DAG"}} -.orchestrates.-> ING
+    AF{{"Airflow<br/>6-hourly DAG"}} -.orchestrates.-> ING
     AF -.-> STG
     DC["Docker Compose<br/>local Airflow + Postgres"] -.runs.-> AF
     GH["GitHub Actions CI<br/>no AWS secrets"] -.checks.-> ING
@@ -30,10 +30,11 @@ Airflow task order (`dags/nyc_taxi_elt.py`):
 `ingest_zones >> ingest_trips >> dbt_prepare >> dbt_snapshot >> dbt_build`.
 
 - `dbt_prepare` runs `dbt run-operation create_raw_tables` and `dbt seed` (both idempotent).
-- Schedule `@monthly`, `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`.
-- Full discovery (ADR 0009): every run checks every month from `ingest_since` (DAG param, `YYYY-MM`, default `2024-01`) through the current month (`ingestion.pipeline --since 2024-01`) and ingests any month published on TLC but missing (or size-mismatched) in S3. Months not yet published return 403 and are skipped. Preview with `--dry-run` (HEAD checks only). A first run after deploy backfills every missing month (about 60 MB and one 2-minute dbt build each).
+- Schedule `0 */6 * * *` (every 6 hours, ADR 0010), `start_date` 2024-01-01, `catchup=False`, `max_active_runs=1`. A run with nothing new skips `ingest_trips` (exit 99) and every dbt task, so it costs only the HEAD checks.
+- Full discovery (ADR 0009): every run checks every month from `ingest_since` (DAG param, `YYYY-MM`, default `2024-01`) through the current month (`ingestion.pipeline --since 2024-01`) and ingests any month published on TLC but missing (or size-mismatched) in S3. Months not yet published return 403 and are skipped. Preview with `--dry-run` (HEAD checks only). To load in batches, set the DAG param `ingest_until` (`YYYY-MM`, inclusive, default empty = current month), which passes `--until` to the loader. A first run after deploy backfills every missing month (about 60 MB and one 2-minute dbt build each).
 - `ingest_trips` passes `--skip-unpublished`. Months that return 403/404 are logged as `unpublished <url>` on stderr and skipped. The last stdout line is `NEW_MONTHS=<months uploaded in this run, oldest first>` (empty if none); the BashOperator pushes it to XCom.
 - Exit codes of `ingestion.pipeline --months ... --skip-unpublished`: 0 if at least one month was uploaded, 99 if nothing was uploaded (all current, or unpublished). `skip_on_exit_code=99` turns 99 into a skipped task, so `dbt_prepare`, `dbt_snapshot` and `dbt_build` are skipped when there is nothing new.
+- Notifications (ADR 0010): task `notify_new` (after `dbt_build`, `trigger_rule=all_done`) sends an ntfy.sh message `NYC taxi ELT: loaded <months>, built in dbt` when a run loaded months and `dbt_build` succeeded; a failure callback sends a high-priority `NYC taxi ELT: task <task_id> failed in run <run_id>`. The topic is the Airflow Variable `NTFY_TOPIC` (empty = no messages): `airflow variables set NTFY_TOPIC <topic>`. A failed send never changes task state.
 - `dbt_build` reads `NEW_MONTHS` from XCom and runs one incremental build per new month, oldest first: `--select stg_zones+ stg_trips+` with `min_year`/`max_year` set to that month's year and `run_month` set to the month. ``dbt_snapshot` uses `min_year` = year of `ingest_since`, `max_year` = the run's year.
 
 ## Stack
