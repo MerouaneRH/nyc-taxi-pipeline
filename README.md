@@ -158,7 +158,8 @@ More docs: [docs/README.md](docs/README.md) lists every document in reading orde
 ## Known limitations
 
 - Ingestion skips a file when the S3 size equals the TLC size. A republished file with the same size goes unnoticed ([ADR 0005](docs/adr/0005-idempotent-size-based-skip.md)).
-- `trip_id` hashes six fields, so two real trips with identical values collapse into one row. Only 2024 is verified. Other years may fail on read. Vendor 7 passes the tests but is unverified.
+- `trip_id` hashes six fields, so two real trips with identical values collapse into one row. Only 2024 is verified. Other years may fail on read.
+- Vendor Helix (vendor 7, in the data from 2024-12) often records the same pickup and dropoff time, so its durations are wrong. Duration-based figures such as revenue per minute and average speed are off for those trips. Revenue and distance look usable. This was measured on 2024-01 to 2026-08, not taken from TLC documentation. See [the data model](docs/data-model.md#known-data-issue-helix-timestamps).
 - Suspect trips stay in every dashboard number, including Efficiency. Nothing excludes them yet.
 - About 1,500 of 5.9 million trips in 2024-01 and 2024-02 show 200 mph or more. A warn-level test reports them.
 - Pull-request CI only parses dbt. The real `dbt build` runs after the merge to `main` ([ADR 0006](docs/adr/0006-ci-without-aws-secrets.md)).

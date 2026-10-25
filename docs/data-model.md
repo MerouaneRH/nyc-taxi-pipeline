@@ -196,6 +196,22 @@ and efficiency figures. Nothing applies that suggestion yet.
 
 The rule for `TIMESTAMP_SUSPECT` is a duration under 60 seconds with a distance of at least 1 mile. A dropoff before the pickup never gets this far, because staging drops it.
 
+### Known data issue: Helix timestamps
+
+Measured on Athena over 2024-01 to 2026-08, `TIMESTAMP_SUSPECT` flags 652,874
+trips, and 652,175 of them are vendor 7 (Helix in the `vendors` seed). Helix
+first appears in 2024-12 with 186 flagged trips. The count grows to 857 in
+2025-01, about 25,000 in 2025-04, and 40,000 to 50,000 a month after that. In
+2026 it is about 30,000 to 37,000 a month. Before 2024-12 the rule flags only 24
+to 51 trips a month.
+
+The sampled Helix rows have a pickup time equal to the dropoff time to the
+second, but a real distance (1 mile or more) and a real fare, mostly paid by
+credit card. So the timestamps look unreliable for these trips. Duration-based
+metrics, such as revenue per minute and average speed, are wrong for Helix
+trips. Revenue and distance look usable. This comes from our own measurement,
+not from a TLC rule, and later data may differ.
+
 ### How rows flow through the quality checks
 
 ```mermaid
