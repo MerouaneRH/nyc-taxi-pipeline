@@ -83,7 +83,13 @@ only. That `year` filter lets Athena skip other folders. The model renames
 columns and casts types, then:
 
 1. Builds `trip_id`, an md5 hash of vendor, pickup time, dropoff time, pickup zone, dropoff zone and total amount.
-2. Drops rows that fail any of these checks: pickup time is null, dropoff is before pickup, the trip lasts 24 hours or more, distance is negative, total amount is negative, or the pickup falls outside the year and month of the file it came from (the files contain stray dates).
+2. Keeps only rows that pass every one of these checks, and drops the rest:
+   - pickup time is not null
+   - dropoff time is not null and is not before pickup
+   - the trip lasts less than 24 hours
+   - distance is not negative
+   - total amount is not negative
+   - the pickup falls in the year and month of the file it came from (the files contain stray dates)
 3. Keeps one row per `trip_id`. The window is partitioned by year, month and `trip_id`, and when rows tie it keeps the first by pickup time, total, passenger count, fare and distance.
 
 Dropped rows are not stored. `mart_month_quality` counts them.
@@ -151,10 +157,9 @@ The table also holds `negative_total_sum` and `passenger_missing_rows` (staged
 rows with a null or zero passenger count, which are kept) and `built_at`, which
 the dashboard uses to notice new builds.
 
-Negative totals are refunds and adjustments, mostly in the dispute, cash and
-no-charge payment types. They are not bad records. Staging drops them so they
-stay out of revenue. For January and February 2024 they sum to about -$1.8
-million.
+Negative totals are refunds and adjustments, mostly dispute, cash and no-charge
+payments. Staging drops them so they stay out of revenue. For January and
+February 2024 they sum to about -$1.8 million.
 
 `dq_suspect_trips` lists trips from `fct_trips` that match at least one rule
 below. Trips stay in `fct_trips`. The table adds:
@@ -189,9 +194,7 @@ Suspect trips stay in every dashboard number. The Data quality view explains eac
 code and suggests keeping suspect trips in revenue but leaving them out of speed
 and efficiency figures. Nothing applies that suggestion yet.
 
-The dashboard's own wording for `TIMESTAMP_SUSPECT` is inaccurate. It says the
-dropoff is at or before the pickup, but staging already drops those rows. The real
-rule is a duration under 60 seconds with a distance of at least 1 mile.
+The rule for `TIMESTAMP_SUSPECT` is a duration under 60 seconds with a distance of at least 1 mile. A dropoff before the pickup never gets this far, because staging drops it.
 
 ### How rows flow through the quality checks
 

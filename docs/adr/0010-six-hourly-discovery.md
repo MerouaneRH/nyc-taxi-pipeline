@@ -2,7 +2,7 @@
 
 Status: Accepted (replaces the `@monthly` schedule of [0009](0009-full-discovery.md); the rest of 0009 stands)
 
-Notifications were part of the first version of this decision. The owner had them removed, and they are deferred until a channel is chosen.
+Notifications are out of scope until a channel is chosen.
 
 ## Context and problem
 

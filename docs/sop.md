@@ -20,7 +20,6 @@ Python commands run from the repo root. dbt commands run from `dbt/` and use
 5. Create the Glue tables and the vendors seed. The DAG task `dbt_prepare` does both on every run, so you only need this for manual runs.
    ```bash
    cd dbt
-   uv run --group dbt dbt deps --profiles-dir . --target athena
    uv run --group dbt dbt run-operation create_raw_tables --profiles-dir . --target athena
    uv run --group dbt dbt seed --profiles-dir . --target athena
    ```
@@ -86,8 +85,10 @@ docker compose exec airflow-scheduler airflow dags trigger nyc_taxi_elt \
   --conf '{"ingest_since": "2024-01", "ingest_until": "2024-12"}'
 ```
 
-The 6-hourly runs after that use the defaults again (no end month). `dbt_build`
-builds one month at a time, about 2 minutes each, so a year takes a while. This
+Run the `--dry-run` command from [Load a new month](#load-a-new-month) first to
+see which months the batch would load. The 6-hourly runs after that use the
+defaults again (no end month). `dbt_build` builds one month at a time, at roughly
+2 minutes each in a run for 2024-04, so 12 months take about 24 minutes of dbt time. This
 `--conf` form has not been tried against a live Airflow. Check the `--since` and
 `--until` values in the `ingest_trips` log.
 
@@ -100,6 +101,9 @@ uv run python -m ingestion.pipeline --service yellow --months 2024-01 2024-02 20
 Then run `dbt snapshot` and `dbt build` once. Months outside `min_year` to
 `max_year` are invisible to the models until you widen those variables, and
 widening them raises the bytes scanned.
+
+The DAG takes the year from `data_interval_start`, so the first run after New Year
+still uses the old year ([ADR 0010](adr/0010-six-hourly-discovery.md)).
 
 ## Change the start month
 

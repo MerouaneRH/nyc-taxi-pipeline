@@ -6,39 +6,9 @@ explains the terms it introduces. For the dbt models themselves, see
 
 ## Overview
 
-```mermaid
-flowchart LR
-    subgraph Source
-        TLC["TLC files<br/>parquet + zone CSV"]
-    end
-    subgraph Ingest
-        ING["ingestion<br/>pipeline.py"]
-    end
-    subgraph Storage["Storage: S3 eu-west-3"]
-        RAW[("raw/<br/>yellow + zones")]
-        WH[("warehouse/<br/>dbt tables")]
-    end
-    subgraph Transform
-        ATH["Athena + Glue<br/>external tables"]
-        DBT["dbt<br/>snapshot + build"]
-    end
-    subgraph Serve
-        APP("Streamlit<br/>dashboard")
-    end
-    subgraph Orchestration
-        AF["Airflow DAG<br/>every 6 hours"]
-    end
-    TLC -->|"size check, download"| ING
-    ING -->|"upload"| RAW
-    RAW -->|"read in place"| ATH
-    DBT -.->|"sends SQL"| ATH
-    ATH -->|"writes models"| WH
-    WH -->|"Athena queries"| APP
-    AF -.->|"runs"| ING
-    AF -.->|"runs"| DBT
-```
-
-Solid arrows carry data or queries. Dashed arrows are commands: Airflow starting a step, and dbt sending SQL to Athena.
+The system overview diagram is in the [README](../README.md#overview). In short:
+a Python loader copies files from TLC to S3, Athena reads them in place, dbt
+builds tables, and the dashboard and Airflow sit on either end.
 
 | Layer | Tool |
 |---|---|
@@ -80,9 +50,10 @@ early, and `--dry-run` only reports what would happen.
 
 Exit codes matter to Airflow. With `--skip-unpublished`, a 403 or 404 prints
 `unpublished <url>` on stderr and the loader moves on. The last line on stdout is
-`NEW_MONTHS=<months uploaded, oldest first>`. The exit code is 0 when at least
-one month was uploaded and 99 when none was. Airflow turns 99 into a skipped
-task instead of a failure.
+`NEW_MONTHS=<months uploaded, oldest first>`, and it is always printed when
+months are processed. With `--skip-unpublished` the exit code is 99 when nothing
+was uploaded and 0 otherwise. Airflow turns 99 into a skipped task instead of a
+failure.
 
 ## 3. Storage
 
@@ -107,7 +78,7 @@ external table is a definition that points at files in S3 without copying them.
 The dbt macro `create_raw_tables` creates the Glue database `nyc_taxi_raw` with
 two external tables:
 
-- `yellow_trips`: parquet, partitioned by `year` and `month`, using partition projection. Projection tells Athena the partition values (years 2009 to 2030, months 1 to 12) instead of listing folders, so no partition registration is needed when a new month lands.
+- `yellow_trips`: parquet, partitioned by `year` and `month`, using partition projection. Projection gives Athena the partition values, years 2009 to 2030 and months 1 to 12, instead of listing folders. New months need no partition registration.
 - `taxi_zone_lookup`: CSV, header row skipped.
 
 The macro uses `create ... if not exists`, so you can run it any number of times.
@@ -122,7 +93,7 @@ dbt-athena. Output goes to the schema `nyc_taxi_dbt`, with data under
 |---|---|
 | `models/staging` | Views. They store no data. |
 | `models/marts` | Hive tables in parquet. |
-| `snapshots/dim_vendor` | Iceberg table. dbt-athena snapshots need Iceberg because they use MERGE. |
+| `snapshots/dim_vendor` | Iceberg table that keeps old versions of each vendor row (SCD2, a slowly changing dimension of type 2). dbt-athena snapshots need Iceberg because they use MERGE. |
 | `seeds` | Hive table from `vendors.csv`. |
 
 Four marts are incremental: `fct_trips`, `mart_hourly_borough`, `mart_od_pairs`
@@ -140,60 +111,15 @@ staging reads. dbt also runs in the Athena workgroup `nyc-taxi-dbt`, which fails
 any query that scans more than 5 GiB. `dbt/scripts/create_workgroup.py` creates
 it ([ADR 0007](adr/0007-incremental-fct-trips-and-workgroup-cap.md)).
 
-### Lineage
-
-```mermaid
-flowchart LR
-    subgraph Sources
-        YT[("yellow_trips")]
-        ZL[("taxi_zone_lookup")]
-        VS[("vendors seed")]
-    end
-    subgraph Staging
-        STG["stg_trips"]
-        SZ["stg_zones"]
-    end
-    subgraph Dimensions
-        DZ["dim_zone"]
-        DV["dim_vendor<br/>SCD2 snapshot"]
-    end
-    subgraph Core
-        FCT["fct_trips"]
-    end
-    subgraph Marts
-        M3("mart_daily_zone_revenue<br/>mart_hourly_borough<br/>mart_od_pairs")
-    end
-    subgraph Quality["Data quality"]
-        MQ("mart_month_quality")
-        DQ("dq_suspect_trips")
-        DS("mart_dq_summary")
-    end
-    YT --> STG
-    ZL --> SZ --> DZ
-    VS --> DV
-    STG --> FCT
-    DZ --> FCT
-    DV --> FCT
-    FCT --> M3
-    FCT --> DQ --> DS
-    FCT -->|"month totals"| DS
-    YT -->|"raw counts"| MQ
-    STG -->|"staged counts"| MQ
-    FCT -->|"speed check"| MQ
-```
-
-Read it left to right: raw sources, cleaned staging, dimensions, then
-`fct_trips`, which holds one row per trip. Everything on the right is built from
-`fct_trips`, except `mart_month_quality`, which also reads the raw table and
-staging so it can compare row counts before and after cleaning. In the DAG, the
-build selection does not include the snapshot. The `dbt_snapshot` task runs it
-first.
+The lineage diagram, from raw tables to marts, is in
+[data-model.md](data-model.md#lineage). In the DAG, the build selection does not
+include the snapshot. The `dbt_snapshot` task runs it first.
 
 ## 6. Orchestration
 
 Airflow is the scheduler. The DAG `nyc_taxi_elt` runs on `0 */6 * * *` (every 6
-hours), with `catchup=False` and `max_active_runs=1`, so runs never overlap and
-missed runs are not replayed. Each task is a `BashOperator` that runs from
+hours), with `start_date` 2024-01-01, `catchup=False` and `max_active_runs=1`, so
+runs never overlap and missed runs are not replayed. Each task is a `BashOperator` that runs from
 `/opt/project`. Python and dbt live in a separate virtualenv (`/opt/venv`) so
 their dependencies do not clash with Airflow's. Tasks retry 3 times with
 exponential backoff, starting at 5 minutes.
@@ -203,7 +129,7 @@ flowchart TD
     CRON(["every 6 hours"]) --> Z["ingest_zones"]
     Z --> T["ingest_trips<br/>--since ingest_since"]
     T -->|"exit 0<br/>NEW_MONTHS=..."| P["dbt_prepare<br/>raw tables + seed"]
-    T -->|"exit 99<br/>nothing new"| SKIP(["skipped: no dbt, no cost"])
+    T -->|"exit 99<br/>nothing new"| SKIP(["skipped: no dbt"])
     P --> S["dbt_snapshot<br/>dim_vendor"]
     S --> B["dbt_build<br/>one build per new month"]
     B --> DONE(["marts updated"])
@@ -221,7 +147,9 @@ What each task does:
 - `ingest_trips` runs `ingestion.pipeline --since <ingest_since> --service yellow --skip-unpublished`, plus `--until <ingest_until>` when that param is set.
 - `dbt_prepare` runs `dbt run-operation create_raw_tables` and `dbt seed`. Both are safe to repeat.
 - `dbt_snapshot` runs `dbt snapshot`. It sets `min_year` to the year of `ingest_since` and `max_year` to the year of the run.
-- `dbt_build` loops over the new months, oldest first. For each it runs `dbt build --select stg_zones+ stg_trips+` with `run_month` set to that month. Here too, `min_year` is the year of `ingest_since` and `max_year` is the run's year, so `mart_month_quality` keeps every month. The `+` selects the model and everything downstream of it, tests included. If one month fails, the loop stops, the task fails, and the retry repeats every month. The builds are safe to repeat.
+- `dbt_build` loops over the new months, oldest first.
+- Each pass runs `dbt build --select stg_zones+ stg_trips+` with `run_month` set to that month. `min_year` is the year of `ingest_since` and `max_year` is the run's year, so `mart_month_quality` keeps every month. The `+` selects the model and everything downstream, tests included.
+- The first failure stops the loop and fails the task. The retry repeats every month, which is safe.
 
 Two DAG params control the range. `ingest_since` (`YYYY-MM`, default
 `2024-01`) is the first month checked and must not be after the run month.
@@ -231,6 +159,10 @@ when it renders the command and fails the task on a bad value. Each run
 checks every month from `ingest_since`, so the cost of an idle run grows by two
 cheap requests per month ([ADR 0009](adr/0009-full-discovery.md),
 [ADR 0010](adr/0010-six-hourly-discovery.md)).
+
+The DAG takes the year from `data_interval_start`, so the first run after New
+Year still uses the old year. [ADR 0010](adr/0010-six-hourly-discovery.md)
+explains the effect.
 
 ## 7. Serving
 

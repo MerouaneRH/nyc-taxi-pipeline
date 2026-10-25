@@ -14,7 +14,7 @@ Read in this order.
    - [0006 CI without AWS secrets](adr/0006-ci-without-aws-secrets.md)
    - [0007 Incremental fct_trips and a capped workgroup](adr/0007-incremental-fct-trips-and-workgroup-cap.md)
    - [0008 Catch-up window for late months](adr/0008-catch-up-window-for-late-months.md) (superseded by 0009)
-   - [0009 Full discovery of TLC months](adr/0009-full-discovery.md)
+   - [0009 Full discovery of TLC months](adr/0009-full-discovery.md) (schedule replaced by 0010)
    - [0010 Six-hourly discovery and batch ranges](adr/0010-six-hourly-discovery.md)
 
 The project overview and quick start are in the [top-level README](../README.md).

@@ -28,7 +28,7 @@ Full discovery.
 ## Consequences
 
 - Requests per run grow with the months since the start month: one S3 head and one HTTP HEAD each (34 months in October 2026, counting from 2024-01). Months that are already current download nothing.
-- A run that finds many new months runs one dbt build for each, about 2 minutes apiece, and downloads about 60 MB per month.
+- A run that finds many new months runs one dbt build for each, about 2 minutes apiece, and downloads about 60 MB per month (rough figures from a run for 2024-04).
 - The first run after this change backfills every missing month between `ingest_since` and the newest published month. Preview it with `--dry-run`.
 - To start later and spend less, raise `ingest_since`. Months before it are never checked.
 - The size-only skip limitation of [0005](0005-idempotent-size-based-skip.md) stays.

@@ -1,10 +1,10 @@
 # NYC taxi pipeline
 
 This project copies the public yellow taxi trip files of the NYC Taxi and
-Limousine Commission (TLC) into S3. It builds analytics tables on them with
-dbt (a tool that runs SQL models in order) and Athena (AWS's SQL engine for
-files in S3), and shows the results in a Streamlit dashboard. Airflow runs the chain every 6 hours and loads new months
-as TLC publishes them.
+Limousine Commission (TLC) into S3. It builds analytics tables on them with dbt
+(a tool that builds SQL models) and Athena (AWS's SQL engine for files in S3),
+and shows the results in a Streamlit dashboard. Airflow runs the chain every 6
+hours and loads new months as TLC publishes them.
 
 You can load every month TLC has published without downloading a file twice,
 query the raw parquet files in place, browse revenue, tips, airports, routes and

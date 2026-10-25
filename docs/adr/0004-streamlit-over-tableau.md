@@ -19,5 +19,5 @@ Use Streamlit. The app queries the marts through Athena with the same AWS profil
 
 - The app is reviewed like other code and can run in Compose.
 - The app lives in `app/` (`main.py`, `data.py`, `loaders.py`, `queries.py`, `views/`) and has seven views. It reads `mart_daily_zone_revenue`, `mart_hourly_borough`, `mart_od_pairs`, `mart_month_quality`, `dq_suspect_trips` and `mart_dq_summary`, and `fct_trips` for one heatmap.
-- Run it with `uv run --group app streamlit run app/main.py`. The Compose service is commented out. `docker/streamlit.Dockerfile` is ready for it.
+- Run it with `uv run --group app streamlit run app/main.py`. `docker/streamlit.Dockerfile` is ready for Compose, but the Compose service is commented out.
 - Each query the app sends to Athena costs scanned bytes. The app caches results for an hour and clears the cache when a new dbt build lands (`app/freshness.py`).
