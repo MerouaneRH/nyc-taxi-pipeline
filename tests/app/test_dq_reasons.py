@@ -28,3 +28,17 @@ def test_validate_reason_whitelist():
 def test_one_line_summary_mentions_handling():
     line = dq_reasons.explain("SPEED_IMPLAUSIBLE", "timestamps")
     assert "timestamps" in line and "exclude" in line.lower()
+
+
+def test_timestamp_suspect_text_matches_the_real_rule():
+    # dbt: duration under dq_short_trip_seconds (60) and at least dq_short_trip_min_miles (1).
+    # Staging already drops dropoff-before-pickup rows, so the text must not claim that.
+    text = dq_reasons.REASONS["TIMESTAMP_SUSPECT"].meaning
+    assert "60 seconds" in text and "1 mile" in text
+    assert "at or before pickup" not in text
+
+
+def test_handling_is_a_suggestion_not_a_dashboard_behaviour():
+    from app.dq_reasons import KEEP_EXCLUDE
+
+    assert "does not" in KEEP_EXCLUDE and "exclude" in KEEP_EXCLUDE.lower()

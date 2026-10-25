@@ -5,7 +5,10 @@
 
 from dataclasses import dataclass
 
-KEEP_EXCLUDE = "Keep in revenue; exclude from speed and efficiency metrics."
+KEEP_EXCLUDE = (
+    "Suggested: keep in revenue and exclude from speed and efficiency analysis. "
+    "The dashboard does not exclude these trips for you."
+)
 
 
 @dataclass(frozen=True)
@@ -22,7 +25,7 @@ REASONS: dict[str, ReasonInfo] = {
         "Distance divided by duration gives a speed no taxi can reach.",
         "distance or timestamps", KEEP_EXCLUDE),
     "TIMESTAMP_SUSPECT": ReasonInfo(
-        "Dropoff is at or before pickup, or the trip lasted only seconds.",
+        "The trip lasted under 60 seconds but covers at least 1 mile.",
         "timestamps", KEEP_EXCLUDE),
     "ZERO_DISTANCE_PAID": ReasonInfo(
         "The meter recorded 0 miles but the passenger paid a fare.", "distance", KEEP_EXCLUDE),
