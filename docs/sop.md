@@ -238,7 +238,7 @@ action. The profile needs, on the bucket and prefixes used here:
 | `AccessDeniedException ... glue:GetTableVersions` (seen) | Iceberg and table replace read Glue table versions. Add `glue:GetTableVersions` and `GetTableVersion` on the catalog, database and tables. |
 | `Table ... not found` for `yellow_trips` or `taxi_zone_lookup` | Run `dbt run-operation create_raw_tables`. |
 | `Relation ... vendors does not exist` in `dbt snapshot` | Run `dbt seed` first. The DAG does this in `dbt_prepare`. |
-| Athena `HIVE_BAD_DATA` or a type mismatch on a month | That file has different column types. Narrow `min_year` and `max_year` to years with the 2024 layout. |
+| Athena `HIVE_BAD_DATA` or a type mismatch on a month | That file may have a column whose type changed. Months from 2024-01 to 2026-08 read without errors. Narrow `min_year` and `max_year` to exclude the failing year. |
 | Zero rows in `fct_trips` | The month is not ingested, or its year is outside the variables. Check the S3 keys and `--vars`. |
 | `SchemaError: ... missing columns` | The downloaded file lacks one of the 10 required columns, so it was not uploaded. Inspect the source file. |
 | `403` or `404` from `remote_size` or the download | The month is not published yet. In the DAG that month is skipped. By hand, pass `--skip-unpublished`. Check `https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_YYYY-MM.parquet`. |

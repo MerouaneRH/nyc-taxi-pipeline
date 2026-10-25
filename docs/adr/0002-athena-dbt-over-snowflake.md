@@ -19,6 +19,6 @@ Use Athena. It needs no extra account, costs nothing when idle, and bills by dat
 
 - Models use Trino-style SQL (`date_diff`, `day_of_week`, `to_hex`, `to_utf8`).
 - Marts are hive tables in parquet. The snapshot is an Iceberg table ([0003](0003-dbt-snapshot-scd2.md)).
-- Athena reads parquet by column name. A month file with different column types can fail on read, so the year range is capped.
+- Athena reads parquet by column name. A month file in which an existing column changed type could fail on read, so `min_year` and `max_year` cap the range. Months from 2024-01 to 2026-08 read without errors. Columns that TLC added later are ignored.
 - Moving to Snowflake needs a new dbt adapter and profile, replacements for the Trino functions, and no Athena-specific `table_type` or `format` settings. The model layout, tests and DAG stay. This move was not tried.
 - Each query costs scanned bytes plus S3 requests.

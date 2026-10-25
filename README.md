@@ -146,7 +146,8 @@ More docs: [docs/README.md](docs/README.md) lists every document in reading orde
 ## Known limitations
 
 - Ingestion skips a file when the S3 size equals the TLC size. A republished file with the same size goes unnoticed ([ADR 0005](docs/adr/0005-idempotent-size-based-skip.md)).
-- `trip_id` hashes six fields, so two real trips with identical values collapse into one row. Only 2024 is verified. Other years may fail on read.
+- `trip_id` hashes six fields, so two real trips with identical values collapse into one row.
+- Months from 2024-01 to 2026-08 load and build. Months before 2024 were not tried. TLC added columns in 2025 (`cbd_congestion_fee`) and mid-2026 (`request_source`). The tables ignore them because Athena reads parquet by column name, and no existing column changed type.
 - Vendor Helix (vendor 7, in the data from 2024-12) often records the same pickup and dropoff time, so its durations are wrong. Duration-based figures such as revenue per minute and average speed are off for those trips. Revenue and distance look usable. This was measured on 2024-01 to 2026-08, not taken from TLC documentation. See [the data model](docs/data-model.md#known-data-issue-helix-timestamps).
 - Suspect trips stay in every dashboard number, including Efficiency. Nothing excludes them yet.
 - About 1,500 of 5.9 million trips in 2024-01 and 2024-02 show 200 mph or more. A warn-level test reports them.
