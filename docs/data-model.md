@@ -6,54 +6,44 @@ see [architecture.md](architecture.md).
 
 ## Lineage
 
+An arrow points from an input to the model built from it. Cylinders are raw
+sources, rectangles are models that other models use, and rounded shapes are
+tables the dashboard reads.
+
+### Main lineage
+
 ```mermaid
 flowchart LR
-    subgraph Sources
-        YT[("yellow_trips")]
-        ZL[("taxi_zone_lookup")]
-        VS[("vendors seed")]
-    end
-    subgraph Staging
-        STG["stg_trips"]
-        SZ["stg_zones"]
-    end
-    subgraph Dimensions
-        DZ["dim_zone"]
-        DV["dim_vendor<br/>SCD2 snapshot"]
-    end
-    subgraph Core
-        FCT["fct_trips"]
-    end
-    subgraph Marts
-        M3("mart_daily_zone_revenue<br/>mart_hourly_borough<br/>mart_od_pairs")
-    end
-    subgraph Quality["Data quality"]
-        MQ("mart_month_quality")
-        DQ("dq_suspect_trips")
-        DS("mart_dq_summary")
-    end
-    YT --> STG
-    ZL --> SZ --> DZ
-    VS --> DV
-    STG --> FCT
+    YT[("yellow_trips")] --> STG["stg_trips"]
+    ZL[("taxi_zone_lookup")] --> SZ["stg_zones"]
+    SZ --> DZ["dim_zone"]
+    VS[("vendors seed")] --> DV["dim_vendor<br/>SCD2 snapshot"]
+    STG --> FCT["fct_trips"]
     DZ --> FCT
     DV --> FCT
-    FCT --> M3
-    FCT --> DQ --> DS
-    FCT -->|"month totals"| DS
-    YT -->|"raw counts"| MQ
-    STG -->|"staged counts"| MQ
-    FCT -->|"speed check"| MQ
+    FCT --> M3("mart_daily_zone_revenue<br/>mart_hourly_borough<br/>mart_od_pairs")
 ```
 
-Cylinders are the raw sources, rectangles are models that other models use,
-and rounded shapes are tables the dashboard reads. An arrow points from an
-input to the model built from it. `fct_trips` is the hub: one row per trip,
-joined to zones and vendors. The three marts and `dq_suspect_trips` are
-summaries or filters of `fct_trips`, and `mart_dq_summary` summarizes
-`dq_suspect_trips`. `mart_month_quality` has three inputs. It reads the raw
-table and `stg_trips` to compare row counts before and after cleaning, and
-`fct_trips` for the speed check.
+`fct_trips` is the hub: one row per trip, joined to zones and vendors. The three
+marts on the right are summaries of it.
+
+### Data-quality lineage
+
+```mermaid
+flowchart LR
+    YT[("yellow_trips")] -->|"raw counts"| MQ("mart_month_quality")
+    STG["stg_trips"] -->|"staged counts"| MQ
+    FCT["fct_trips"] -->|"speed check"| MQ
+    FCT --> DQ("dq_suspect_trips")
+    DQ --> DS("mart_dq_summary")
+    FCT -->|"month totals"| DS
+```
+
+`stg_trips` and `fct_trips` are the models from the main lineage.
+`mart_month_quality` has three inputs. It compares raw rows with staged rows, and
+it reads `fct_trips` for the speed check. `dq_suspect_trips` filters
+`fct_trips`, and `mart_dq_summary` summarizes `dq_suspect_trips` by month and
+reason, using `fct_trips` for each month's total.
 
 ## Models at a glance
 

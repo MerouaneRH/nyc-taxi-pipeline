@@ -14,43 +14,31 @@ look wrong but stayed in.
 ## Overview
 
 ```mermaid
-flowchart LR
-    subgraph Source
-        TLC["TLC files<br/>parquet + zone CSV"]
-    end
-    subgraph Ingest
-        ING["ingestion<br/>pipeline.py"]
-    end
-    subgraph Storage["Storage: S3 eu-west-3"]
-        RAW[("raw/<br/>yellow + zones")]
-        WH[("warehouse/<br/>dbt tables")]
-    end
-    subgraph Transform
-        ATH["Athena + Glue<br/>external tables"]
-        DBT["dbt<br/>snapshot + build"]
-    end
-    subgraph Serve
-        APP("Streamlit<br/>dashboard")
-    end
-    subgraph Orchestration
-        AF["Airflow DAG<br/>every 6 hours"]
-    end
+flowchart TB
+    AF["Airflow DAG<br/>every 6 hours"]
+    TLC["TLC files<br/>parquet + zone CSV"]
+    ING["Python loader<br/>pipeline.py"]
+    RAW[("S3 raw/")]
+    ATH["Athena + Glue<br/>external tables"]
+    DBT["dbt"]
+    WH[("S3 warehouse/")]
+    APP("Streamlit dashboard")
     TLC -->|"size check, download"| ING
     ING -->|"upload"| RAW
     RAW -->|"read in place"| ATH
-    DBT -.->|"sends SQL"| ATH
-    ATH -->|"writes models"| WH
-    WH -->|"Athena queries"| APP
+    ATH -->|"writes tables"| WH
+    WH -->|"queried through Athena"| APP
     AF -.->|"runs"| ING
     AF -.->|"runs"| DBT
+    DBT -.->|"sends SQL"| ATH
 ```
 
-Solid arrows carry data or queries. Dashed arrows show Airflow starting a step.
-The Python loader copies each monthly file to S3 and skips a file when S3 holds
-one of the same size. Athena
-reads those files through Glue external tables (table definitions that point at
-files in S3), and dbt builds its models on top. The dashboard queries the
-finished tables through Athena.
+Read it top to bottom. Solid arrows carry data. Dashed arrows are commands:
+Airflow starts the loader and dbt, and dbt sends SQL to Athena. The loader
+copies each monthly file to S3 and skips a file when S3 holds one of the same
+size. Athena reads those files through Glue external tables (table definitions
+that point at files in S3) and writes the dbt models to the warehouse prefix.
+The dashboard queries those tables through Athena.
 
 ## Quick start
 
