@@ -1,5 +1,5 @@
 # Tag: apache/airflow:2.10.5-python3.12
-FROM apache/airflow@sha256:6499a680a93463846d3a6be980e85d601dc97b0d81e82eed9ef5e5cb9da31b79
+FROM apache/airflow@sha256:a8d9d19c563c768b2bc605ef26440f28a9164ea886064e99c599b057432ff572
 
 # Project deps + dbt live in a dedicated venv so they cannot clash with
 # Airflow's constrained dependency set. DAG tasks call /opt/venv/bin/*.
