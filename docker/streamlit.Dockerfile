@@ -1,5 +1,5 @@
 # Tag: python:3.12.11-slim
-FROM python@sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f
+FROM python@sha256:e4bc83a3314d078d651f06c8440e9a03ba892ee2f6577437f174abd8731fb343
 WORKDIR /opt/project
 RUN pip install --no-cache-dir "streamlit==1.66.1" "boto3==1.43.118" "pandas==2.3.3"
 COPY app/ app/
